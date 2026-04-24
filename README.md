@@ -6,6 +6,40 @@ A production-grade Chrome Extension for internal sales teams to generate, person
 
 ---
 
+## What's new in v2
+
+### Live meeting copilot
+- **On-screen transponder** on Google Meet pages — shows the active coach suggestion, sentiment trend, agenda pacing, and a "thinking…" indicator in a compact floating panel that doesn't block the call UI.
+- **Multi-agent pipeline** running on independent cadences against a shared meeting session store:
+  - **Sentiment agent** (20s cadence) — rolls up an energy reading (low/medium/high) with a 3-snapshot trend arrow (`High ↘ Med`).
+  - **Agenda agent** (30s cadence) — tracks agenda item coverage; computes a drift ratio (`coveredRatio − expectedRatio`) so you can see when a call is behind pace.
+  - **Coach agent** (15s cadence + debounced live trigger on every new final transcript segment) — suggests next-best-sentence, objection handles, and pivot moves.
+  - **Council validator** (Opus 4.7) — approves / revises / rejects each coach suggestion; rejections surface as a faint pill so you see *why* something was dropped.
+- **Zustand `subscribe()`** replaces the old 250ms transcript poll — the trigger fires on every new final segment, not on a wall-clock loop.
+
+### Trust & quality signals
+- Every approved suggestion carries a **rationale** (one-line "Why:") and a **confidence** score (0–1). The transponder renders a border color and chip based on confidence band.
+- Malformed JSON from the coach LLM is **salvaged**: the first sentence of the raw body becomes a single `say_next` suggestion rather than dropping the whole turn.
+- **Consecutive-failure streak counter** per agent — after 3 back-to-back errors, a single banner appears instead of spamming the user. Streak resets on first success.
+
+### Cost controls
+- **Validator cache** (30s TTL, 200-entry cap) keyed on `title + body + kind` — repeated suggestions skip the validator LLM call entirely.
+- **OpenAI-compatible custom provider** — point at OpenRouter, Together, Fireworks, Mistral, DeepSeek, or a local LLM. Ships with an OpenRouter example preset (URL + model pre-filled, user pastes their own key).
+
+### Safety & retention
+- **Admin passcode gate** on the Settings panel (SHA-256 in localStorage, sessionStorage unlock). Keeps casual users on a shared laptop from changing provider keys.
+- **24-hour PII retention** on meeting session history. Transcripts and per-call summaries include prospect names and pricing discussions — the extension auto-prunes on every history read so call data isn't hoarded.
+- **Danger Zone** in Settings: one-click wipe of session history, calendar cache, transponder layout, and auto-start flag. API keys and integration credentials are preserved.
+
+### Integrations (manual, user-paste credentials)
+- **Zoho CRM**, **Google Meet**, **Zoom**, and a **custom tool** card — users paste their own tokens from the respective consoles. The extension never runs an OAuth flow; each card has a Test button that validates before marking "connected."
+
+### Dev / ops
+- Separate sidebar-side and background-side orchestrators (so live-agent work keeps running when the sidebar is closed), sharing pure helpers (`computeSentimentTrend`, `computeAgendaPacing`, `rejectionFromOutcome`).
+- Production build: `sidebar.js` 148 KB, `background.js` 17 KB, `meet-transponder.js` 26 KB. No framework in the transponder — vanilla TS + `chrome.tabs.sendMessage` for state updates.
+
+---
+
 ## System Architecture
 
 ```
