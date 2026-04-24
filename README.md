@@ -2,133 +2,138 @@
 
 > Built for ZopNight's sales team.
 
-A production-grade Chrome Extension for internal sales teams to generate, personalize, and update client-facing presentations and documents in real-time — powered by RAG, multi-agent validation, ICP profiling, and role-based Design System enforcement.
+A Chrome Extension that turns a sales rep's browser into a live meeting copilot. Runs a multi-agent LLM pipeline (sentiment, agenda, coach, council validator) against a real-time transcript of a Google Meet call and surfaces next-best-sentence suggestions, objection handles, and agenda pacing in an on-screen transponder — all without shipping transcripts to a central server.
 
----
-
-## What's new in v2
-
-### Live meeting copilot
-- **On-screen transponder** on Google Meet pages — shows the active coach suggestion, sentiment trend, agenda pacing, and a "thinking…" indicator in a compact floating panel that doesn't block the call UI.
-- **Multi-agent pipeline** running on independent cadences against a shared meeting session store:
-  - **Sentiment agent** (20s cadence) — rolls up an energy reading (low/medium/high) with a 3-snapshot trend arrow (`High ↘ Med`).
-  - **Agenda agent** (30s cadence) — tracks agenda item coverage; computes a drift ratio (`coveredRatio − expectedRatio`) so you can see when a call is behind pace.
-  - **Coach agent** (15s cadence + debounced live trigger on every new final transcript segment) — suggests next-best-sentence, objection handles, and pivot moves.
-  - **Council validator** (Opus 4.7) — approves / revises / rejects each coach suggestion; rejections surface as a faint pill so you see *why* something was dropped.
-- **Zustand `subscribe()`** replaces the old 250ms transcript poll — the trigger fires on every new final segment, not on a wall-clock loop.
-
-### Trust & quality signals
-- Every approved suggestion carries a **rationale** (one-line "Why:") and a **confidence** score (0–1). The transponder renders a border color and chip based on confidence band.
-- Malformed JSON from the coach LLM is **salvaged**: the first sentence of the raw body becomes a single `say_next` suggestion rather than dropping the whole turn.
-- **Consecutive-failure streak counter** per agent — after 3 back-to-back errors, a single banner appears instead of spamming the user. Streak resets on first success.
-
-### Cost controls
-- **Validator cache** (30s TTL, 200-entry cap) keyed on `title + body + kind` — repeated suggestions skip the validator LLM call entirely.
-- **OpenAI-compatible custom provider** — point at OpenRouter, Together, Fireworks, Mistral, DeepSeek, or a local LLM. Ships with an OpenRouter example preset (URL + model pre-filled, user pastes their own key).
-
-### Safety & retention
-- **Admin passcode gate** on the Settings panel (SHA-256 in localStorage, sessionStorage unlock). Keeps casual users on a shared laptop from changing provider keys.
-- **24-hour PII retention** on meeting session history. Transcripts and per-call summaries include prospect names and pricing discussions — the extension auto-prunes on every history read so call data isn't hoarded.
-- **Danger Zone** in Settings: one-click wipe of session history, calendar cache, transponder layout, and auto-start flag. API keys and integration credentials are preserved.
-
-### Integrations (manual, user-paste credentials)
-- **Zoho CRM**, **Google Meet**, **Zoom**, and a **custom tool** card — users paste their own tokens from the respective consoles. The extension never runs an OAuth flow; each card has a Test button that validates before marking "connected."
-
-### Dev / ops
-- Separate sidebar-side and background-side orchestrators (so live-agent work keeps running when the sidebar is closed), sharing pure helpers (`computeSentimentTrend`, `computeAgendaPacing`, `rejectionFromOutcome`).
-- Production build: `sidebar.js` 148 KB, `background.js` 17 KB, `meet-transponder.js` 26 KB. No framework in the transponder — vanilla TS + `chrome.tabs.sendMessage` for state updates.
+Full-stack is scaffolded for RAG + document generation, but the shipped MVP runs entirely client-side. The extension talks directly to the user's chosen LLM provider (Gemini / Anthropic / Groq / any OpenAI-compatible endpoint) using keys that live only on the user's machine.
 
 ---
 
 ## System Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                    CHROME EXTENSION (Frontend)                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
-│  │  Sidebar UI  │  │Content Script│  │  Background Worker    │ │
-│  │  (React/TS)  │  │(Page Context)│  │  (API Orchestration)  │ │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬────────────┘ │
-└─────────┼────────────────┼──────────────────────┼──────────────┘
-          │                │                      │
-          └────────────────┼──────────────────────┘
-                           │ HTTPS / WebSocket
-                           ▼
-┌────────────────────────────────────────────────────────────────┐
-│                    BACKEND (FastAPI + Python)                   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              MULTI-AGENT ORCHESTRATOR                   │   │
-│  │                                                         │   │
-│  │  ┌───────────────┐  ┌────────────────┐                 │   │
-│  │  │  Agent 1      │  │   Agent 2      │                 │   │
-│  │  │  RAG/Retrieval│→ │Brand Compliance│                 │   │
-│  │  │  Agent        │  │Agent           │                 │   │
-│  │  └───────┬───────┘  └───────┬────────┘                │   │
-│  │          │                  │                          │   │
-│  │  ┌───────▼───────┐  ┌───────▼────────┐                │   │
-│  │  │  Agent 3      │→ │   Agent 4      │                │   │
-│  │  │  ICP          │  │  Validation &  │                │   │
-│  │  │  Personalize  │  │  Fact-Check    │                │   │
-│  │  └───────────────┘  └───────┬────────┘                │   │
-│  └───────────────────────────── ┼───────────────────────┘   │
-│                                 │                             │
-│  ┌──────────────┐  ┌────────────▼──────┐  ┌──────────────┐  │
-│  │  RAG Pipeline│  │  Document Generator│  │  RBAC Engine │  │
-│  │  (Pinecone + │  │  (Slides/PDF)      │  │  (Supabase)  │  │
-│  │   LangChain) │  └───────────────────┘  └──────────────┘  │
-│  └──────────────┘                                             │
-└────────────────────────────────────────────────────────────────┘
-          │                    │                    │
-   ┌──────▼──────┐    ┌────────▼────────┐  ┌──────▼──────┐
-   │  Pinecone   │    │  Google Slides  │  │  Supabase   │
-   │  Vector DB  │    │  / Drive API    │  │  (DB + Auth)│
-   └─────────────┘    └─────────────────┘  └─────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       CHROME EXTENSION (MV3)                         │
+│                                                                      │
+│  ┌────────────────┐  ┌──────────────────┐  ┌────────────────────┐    │
+│  │  Sidebar UI    │  │  Background SW   │  │  Content Scripts   │    │
+│  │  (React + TS)  │◀▶│  (Orchestrator,  │◀▶│  - meet-transponder│    │
+│  │  + Zustand     │  │   calendar poll) │  │  - page context    │    │
+│  └────────┬───────┘  └────────┬─────────┘  └─────────┬──────────┘    │
+│           │                   │                      │               │
+│           │   ┌───────────────▼────────────────┐     │               │
+│           │   │   Offscreen Document           │     │               │
+│           │   │   (tab audio → Deepgram STT)   │     │               │
+│           │   └────────────────────────────────┘     │               │
+│           │                                          │               │
+│           │            shared Zustand store          │               │
+│           │    (session, transcript, suggestions,    │               │
+│           │     sentiment history, agenda, coach     │               │
+│           │     rejections, integrations, settings)  │               │
+│           │                                          │               │
+└───────────┼──────────────────────────────────────────┼───────────────┘
+            │                                          │
+            │ HTTPS direct (no backend hop)            │
+            ▼                                          │
+    ┌───────────────────────────┐                      │
+    │  LLM Providers            │                      │
+    │  - Gemini (free tier)     │                      │
+    │  - Groq (free, fast)      │                      │
+    │  - Anthropic Claude       │                      │
+    │  - OpenAI-compatible      │                      │
+    │    (OpenRouter, local,…)  │                      │
+    └───────────────────────────┘                      │
+                                                       │
+                     ┌─────────────────────────────────┘
+                     ▼
+            ┌───────────────────────┐
+            │  Google APIs          │
+            │  - Calendar (upcoming │
+            │    meetings)          │
+            │  - OAuth (sign-in)    │
+            └───────────────────────┘
 ```
 
----
+### Live meeting loop (what the transponder is doing while you talk)
 
-## Roles & RBAC
+```
+ ┌──────────────┐       ┌───────────────┐       ┌────────────────┐
+ │ Tab audio    │──────▶│ Deepgram STT  │──────▶│ Final segments │
+ │ (offscreen)  │       │ (streaming)   │       │ land in store  │
+ └──────────────┘       └───────────────┘       └───────┬────────┘
+                                                        │
+                            Zustand subscribe fires     │
+                         on each new final segment      │
+                                                        ▼
+   ┌─────────────┐       ┌───────────────┐      ┌──────────────────┐
+   │ Sentiment   │   ◀── │ Debounced     │ ──▶  │ Coach agent      │
+   │ agent 20s   │       │ live trigger  │      │ (Haiku 4.5)      │
+   └──────┬──────┘       └───────┬───────┘      └────────┬─────────┘
+          │                      │                       │
+          │               ┌──────▼──────┐         suggestions
+          │               │ Agenda 30s  │                │
+          │               └─────────────┘                ▼
+          │                                     ┌──────────────────┐
+          ▼                                     │ Council validator│
+   sentimentTrend                               │ (Opus 4.7)       │
+   (High ↘ Med)                                 │ approve / revise │
+                                                │ / reject         │
+                                                └────────┬─────────┘
+                                                         │
+            mirrored via chrome.tabs.sendMessage         │
+            to the Meet-tab transponder for render ◀─────┘
+```
 
-| Role | Permissions |
-|------|-------------|
-| **Designer** | Upload/update Design System, manage templates, manage layouts |
-| **PMM** (Product Marketing Manager) | Update Brand Voice & Tone, manage messaging framework |
-| **Sales Rep** | Generate docs, use extension, access all content |
-| **Admin** | Full access to all resources |
-| **Viewer** | Read-only access to generated content |
+Key properties of the loop:
+
+- **In-flight + pending re-trigger pattern** — Opus has 5–9s round trips; naive gating would drop every segment spoken during an in-flight call. Coach and sentiment set a `*Pending` flag when the trigger fires mid-flight and re-fire immediately on completion.
+- **Validator cache** — 30s TTL, 200-entry cap, keyed on `suggestion.title + body + kind`. Repeated suggestions skip the council entirely.
+- **Error streak counter** — after 3 consecutive failures per agent, a single banner surfaces instead of spamming. Resets on first success.
+- **No polling** — the 250 ms transcript poll from earlier builds was replaced with `useMeetingCopilotStore.subscribe()`; the trigger fires on every new final segment, not on a wall-clock loop.
 
 ---
 
 ## Key Features
 
-### 1. Meeting Prep Mode
-- Enter company name → extension auto-detects context from LinkedIn/website tab
-- Select ICP role (CFO, CTO, VP Sales, etc.)
-- Choose output type (Slides, PDF, Doc)
-- Multi-agent pipeline generates personalized content
+### 1. Live meeting copilot (Google Meet)
+- On-screen **transponder** panel that attaches to a Google Meet tab. Shows current coach suggestion, sentiment trend, agenda pacing, confidence chip, and a "thinking…" indicator.
+- **Council rejections are surfaced** (not silently dropped) as a faint pill so the rep sees *why* a suggestion was blocked.
+- **Session auto-start** via calendar polling — when a meeting you own starts, the transponder opens with title + attendees pre-filled.
+- All derived signals are pure helpers (`computeSentimentTrend`, `computeAgendaPacing`, `rejectionFromOutcome`) so the sidebar-side and background-side orchestrators share logic without duplication.
 
-### 2. Live Meeting Mode
-- Real-time doc updates during meeting
-- Quick action buttons: "Make CFO-friendly", "Add ROI slide", "Simplify", "Add technical depth"
-- Insert into active Google Slides/Docs tab
+### 2. Trust signals on every suggestion
+- **Rationale** — one-line "Why:" row explaining the suggestion in the rep's own frame (e.g. "Buyer raised procurement concern — this pivots to finance ROI").
+- **Confidence score** (0–1) — rendered as a chip + border color (high / medium / low bands).
+- **Malformed JSON salvage** — if the coach LLM returns broken JSON, the first sentence of the raw body becomes a single `say_next` suggestion instead of dropping the turn. Raw head is logged for debugging.
 
-### 3. ICP Profiling
-- Pre-defined ICP profiles with persona-specific content rules
-- CFO → metrics-first, numbers, ROI blocks
-- CTO → architecture diagrams, integration depth, security
-- VP Sales → competitive differentiation, case studies, social proof
+### 3. Provider flexibility
+- **Gemini** (free tier, 1,500 req/day) — default.
+- **Groq** (free, very fast Llama 3.3 70B).
+- **Anthropic Claude** (paid, highest quality).
+- **Any OpenAI-compatible endpoint** via the Custom provider — ships with an OpenRouter preset (URL + model pre-filled, user pastes their own key). Works with Together, Fireworks, Mistral, DeepSeek, local Ollama, or a self-hosted proxy.
 
-### 4. RAG + Multi-Agent Validation
-- **Agent 1 (Retrieval)**: Pulls relevant content from internal docs, repos, case studies
-- **Agent 2 (Brand Compliance)**: Checks against Design System + Brand Voice
-- **Agent 3 (ICP Personalization)**: Adapts tone and content for ICP profile
-- **Agent 4 (Validation)**: Cross-checks agents 1–3, removes hallucinations, approves final output
+### 4. Admin gate (RBAC, client-side)
+- **Passcode gate** on the Settings panel. SHA-256 of the passcode is stored in localStorage; a sessionStorage flag unlocks for the current session. "Lock admin & close" clears the flag.
+- Not cryptographic access control — it's a "casual user on a shared laptop can't change provider keys" gate.
+- First-open flow: if no passcode is set, the gate offers a set-passcode dialog before revealing Settings.
 
-### 5. Design System Enforcement
-- Designer uploads DS (components, colors, typography, layouts)
-- All generated content MUST use only approved components
-- DS violations are blocked before output
+### 5. Session history + 24h PII retention
+- Meeting summaries (company, persona, headline, summary markdown) are saved to localStorage with a 20-session cap.
+- **Automatic 24-hour pruning** on every history read — transcripts and per-call summaries contain prospect names, pricing discussions, and verbatim quotes, so the extension never hoards call data indefinitely. Reps who need longer retention push to their CRM via the Integrations flow.
+- **Danger Zone** in Settings: one-click wipe of session history, calendar cache, transponder layout, and auto-start flag. API keys and integration credentials are preserved.
+
+### 6. Integrations (manual, user-paste credentials)
+Four integration cards in Settings:
+- **Zoho CRM** — API domain, client ID/secret, refresh token
+- **Google Meet** — OAuth client ID/secret, refresh token
+- **Zoom** — account ID, client ID/secret
+- **Custom tool** — pull/push endpoints + API key for any other CRM or internal service
+
+Each card has a **Test** button that validates credentials before marking "connected." The extension never runs an OAuth flow itself — the user pastes tokens they obtained from the third-party console.
+
+### 7. Pitch generation (non-live path)
+- Company name + ICP role (CFO / CTO / VP Sales / etc.) + output type → multi-agent pipeline generates a personalized deck / one-pager / analysis.
+- Streaming generation with a live preview; copy-to-clipboard + export to Google Slides/Docs.
+- Onboarding checklist tracks: provider key set, first pitch generated, transponder used, integration connected.
 
 ---
 
@@ -136,103 +141,104 @@ A production-grade Chrome Extension for internal sales teams to generate, person
 
 | Layer | Technology |
 |-------|-----------|
-| Extension UI | React 18, TypeScript, Tailwind CSS |
-| Extension Runtime | Chrome Manifest V3, Service Worker |
-| Backend Framework | FastAPI (Python 3.11) |
-| AI / Agents | Claude claude-sonnet-4-6 (Anthropic SDK), LangChain |
-| RAG / Vector Store | Pinecone + OpenAI/Voyage embeddings |
-| Database + Auth | Supabase (Postgres + Row Level Security) |
-| Document Generation | Google Slides API, Puppeteer (PDF) |
-| File Storage | Supabase Storage (DS assets, brand files) |
-| Deployment | Railway / Render (backend), Chrome Web Store (extension) |
+| Extension runtime | Chrome Manifest V3 (side panel, service worker, content scripts, offscreen doc) |
+| Extension UI | React 18, TypeScript, Vite, Zustand, Tailwind CSS, lucide-react |
+| Transcription | Deepgram streaming STT (tab audio captured in offscreen document) |
+| LLM clients | Anthropic SDK, `@google/genai`, OpenAI-compatible fetch (Groq / OpenRouter / custom) |
+| Auth | Google OAuth (chrome.identity) — optional workspace domain lock |
+| Backend (scaffolded) | FastAPI (Python 3.11), LangChain, Pinecone, Supabase |
+| Document generation (planned) | Google Slides API, Puppeteer (PDF) |
+
+The MVP runs entirely client-side. The backend folder is **scaffolded** for the future RAG + document-generation path but is not required to run or develop the extension.
 
 ---
 
 ## Project Structure
 
 ```
-├── extension/              # Chrome Extension (React + TypeScript)
-│   ├── manifest.json
+├── extension/                   # Chrome Extension (all v2 runtime lives here)
+│   ├── manifest.json            # MV3 manifest: side panel, offscreen, content scripts
+│   ├── sidebar.html             # Side panel entry point
+│   ├── popup.html               # Toolbar popup
+│   ├── offscreen.html           # Hidden document for tab audio capture
 │   ├── src/
-│   │   ├── background/     # Service worker
-│   │   ├── content/        # Page context capture
-│   │   ├── sidebar/        # Main extension UI
-│   │   └── popup/          # Extension popup
-│   └── package.json
+│   │   ├── background/          # Service worker + bg-orchestrator (calendar poll, live agents when sidebar closed)
+│   │   ├── content/             # meet-transponder (vanilla TS, no React — runs inside the Meet tab)
+│   │   ├── offscreen/           # Deepgram STT client
+│   │   ├── popup/               # Toolbar popup UI
+│   │   ├── sidebar/             # Main UI (React)
+│   │   │   ├── components/      # AdminGate, AuthGate, SettingsPanel, MeetingCopilotPanel, …
+│   │   │   ├── stores/          # Zustand: app-store, meeting-copilot-store
+│   │   │   └── hooks/           # useGeneration, etc.
+│   │   ├── meeting-copilot/     # Live agents, council validator, live helpers
+│   │   └── shared/              # llm-client, settings-storage, integrations, auth, types
+│   └── scripts/
 │
-├── backend/                # FastAPI Backend
-│   ├── agents/             # Multi-agent system
-│   ├── rag/                # RAG pipeline
-│   ├── rbac/               # Role-based access control
-│   ├── document_gen/       # Slides + PDF generation
-│   ├── api/                # Routes + middleware
-│   └── db/                 # Database models + migrations
+├── backend/                     # FastAPI scaffold (not required for MVP)
+│   ├── agents/                  # Retrieval / brand-compliance / ICP / validation agents
+│   ├── rag/                     # Pinecone + LangChain pipeline
+│   ├── rbac/                    # Role + permission engine
+│   ├── document_gen/            # Google Slides + PDF generation
+│   ├── api/                     # FastAPI routes + middleware
+│   ├── db/                      # Supabase models + migrations
+│   └── requirements.txt
 │
-└── docs/                   # Architecture, API docs, runbooks
+└── docs/                        # Architecture, API docs, runbooks
 ```
 
 ---
 
 ## Getting Started
 
-### Backend
+### Extension (this is the MVP — all you need to run ClientLens)
+
+```bash
+cd extension
+npm install
+cp .env.example .env.local       # fill in keys if you want build-time defaults
+npm run build                    # production build → extension/dist
+# or: npm run dev                # watch mode
+```
+
+Load the extension in Chrome:
+1. Open `chrome://extensions`
+2. Toggle **Developer mode** on (top-right)
+3. Click **Load unpacked**
+4. Select the `extension/dist` folder
+5. Pin the ClientLens icon in Chrome's toolbar
+6. Click it → side panel opens
+
+On first open you'll see an onboarding checklist: pick a provider, paste a key in **Settings → Advanced · Model provider**, and you're ready to run a pitch. For the live meeting copilot, join a Google Meet call and the transponder will offer to start.
+
+### Backend (optional, only if you're building out the RAG / document-gen path)
+
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in your keys
+cp .env.example .env             # fill in your keys
 uvicorn main:app --reload
 ```
 
-### Extension
-```bash
-cd extension
-npm install
-cp .env.example .env.local   # fill in your keys
-npm run dev          # watch mode
-npm run build        # production build
-```
-Load the `extension/dist` folder in Chrome via `chrome://extensions` → "Load unpacked".
-
 ---
 
-## Environment Variables
+## Environment variables
+
+### Extension (`extension/.env.local`)
+
+Most settings are now stored in the extension's Settings UI (credentials live in the browser, not in env vars). The `.env.local` file only matters for *build-time defaults*:
 
 ```env
-# Anthropic
-ANTHROPIC_API_KEY=
+# Preview / mock mode — bypasses real LLM calls, useful for UI dev.
+VITE_MOCK_MODE=true
 
-# Supabase
-SUPABASE_URL=
-SUPABASE_SERVICE_KEY=
+# Default provider if the user never opens Settings.
+VITE_LLM_PROVIDER=gemini
 
-# Pinecone
-PINECONE_API_KEY=
-PINECONE_INDEX=
-
-# Google APIs
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-
-# App
-BACKEND_URL=https://your-backend.railway.app
-ALLOWED_ORIGINS=chrome-extension://YOUR_EXTENSION_ID
-```
-
----
-
-## Local Development Notes
-
-A few things to configure locally that are intentionally **not** committed to the repo:
-
-### 1. API keys
-
-The `extension/.env.local` file ships with placeholder values (e.g. `YOUR_GEMINI_API_KEY_HERE`). Paste your own keys in before running:
-
-```env
-VITE_GEMINI_API_KEY=your-real-gemini-key
-VITE_GROQ_API_KEY=your-real-groq-key
-VITE_ANTHROPIC_API_KEY=your-real-anthropic-key
+# Optional — pre-fills the provider key fields on first install.
+VITE_GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
+VITE_GROQ_API_KEY=YOUR_GROQ_API_KEY_HERE
+VITE_ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY_HERE
 ```
 
 Free tiers work fine:
@@ -240,24 +246,81 @@ Free tiers work fine:
 - **Groq** (free, very fast Llama): https://console.groq.com/keys
 - **Anthropic** (paid, best quality): https://console.anthropic.com
 
-`.env.local` is gitignored — your keys stay on your machine.
+### Backend (`backend/.env`, only if you're running the scaffold)
 
-### 2. Workspace gating
+```env
+ANTHROPIC_API_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_KEY=
+PINECONE_API_KEY=
+PINECONE_INDEX=clientlens
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+BACKEND_URL=https://your-backend.railway.app
+ALLOWED_ORIGINS=chrome-extension://YOUR_EXTENSION_ID
+JWT_SECRET=change-me-in-production
+```
 
-By default the extension allows any Google account ending in `@example.com` — effectively disabling the gate for local dev. To restrict sign-in to your company's Google Workspace, edit:
+---
+
+## Local configuration (not committed to the repo)
+
+### 1. Workspace sign-in gating
+
+By default the extension allows **any** signed-in Google account. To restrict sign-in to a specific Google Workspace domain (e.g. your company), edit:
 
 ```
 extension/src/shared/auth/team-config.ts
 ```
 
-and change:
 ```ts
-export const ALLOWED_EMAIL_DOMAIN = "example.com";
+export const ALLOWED_EMAIL_DOMAIN = "yourcompany.com";  // "" = allow any
 ```
-to your domain (e.g. `"yourcompany.com"`). **Change this locally only — do not commit the change** if you're working off a fork of the public repo, so the default stays generic for other users.
 
-You can also add admin/designer/PMM roles in the same file via the `ROLE_OVERRIDES` map.
+You can also add admin / designer / PMM / sales-rep overrides in the same file via the `ROLE_OVERRIDES` map.
 
-### 3. OAuth client ID
+### 2. OAuth client ID
 
 `extension/manifest.json` has `"client_id": "YOUR_GOOGLE_CLIENT_ID"`. To enable real Google sign-in, create an OAuth 2.0 Client ID in Google Cloud Console (Application type: **Chrome Extension**) and replace the placeholder. Keep this out of public commits.
+
+### 3. Admin passcode
+
+Set the admin passcode once via Settings → Advanced → Admin (the gate will prompt on first open). There's no recovery flow — if forgotten, clear `clientlens_admin_hash_v1` from localStorage via Chrome DevTools.
+
+---
+
+## Privacy model
+
+- **Transcripts, suggestions, and session summaries never leave the user's browser.** LLM calls go direct to the provider of the user's choice.
+- Deepgram receives the tab audio stream during live calls (this is the STT path). No audio is stored by the extension.
+- Session history is localStorage-only, auto-pruned after 24h. Admin-only Danger Zone wipe is available in Settings.
+- Integration credentials (Zoho / Meet / Zoom / custom) are stored in localStorage + mirrored to `chrome.storage.local` for cross-surface persistence. They never leave the device unless the user explicitly triggers a push/test call.
+
+---
+
+## Roles & RBAC (roadmap)
+
+The RBAC surface below is scaffolded in the backend for the future RAG + document-generation path. The v2 MVP ships with a simpler **admin passcode gate on Settings** (§ Key Features · 4).
+
+| Role | Permissions |
+|------|-------------|
+| **Designer** | Upload/update Design System, manage templates, manage layouts |
+| **PMM** | Update Brand Voice & Tone, manage messaging framework |
+| **Sales Rep** | Generate docs, use extension, access all content |
+| **Admin** | Full access to all resources |
+| **Viewer** | Read-only access to generated content |
+
+---
+
+## Roadmap
+
+- [ ] Wire the scaffolded backend: RAG over internal case studies, design-system enforcement, Slides/PDF export.
+- [ ] Replace the admin passcode gate with full server-side RBAC once the backend is live.
+- [ ] Shared `OrchestratorEngine` so the sidebar-side and background-side live orchestrators share a single implementation.
+- [ ] Chrome Web Store listing.
+
+---
+
+## License
+
+MIT (see `LICENSE` — add one before publishing if you haven't already).
