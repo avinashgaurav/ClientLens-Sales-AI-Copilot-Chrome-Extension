@@ -1,5 +1,7 @@
-import type { ExtensionMessage, SlideContent } from "../shared/types";
+import type { ExtensionMessage, SlideContent, TranscriptSegment } from "../shared/types";
 import { writeToDoc, undoWrite } from "./google-writer";
+import { startAudioForSession, stopAudio } from "../meeting-copilot/audio-controller";
+import { startBgOrchestrator, stopBgOrchestrator, bgAppendTranscript } from "./bg-orchestrator";
 
 // Open sidebar when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
@@ -267,6 +269,81 @@ async function handleUndoWrite(
     sendResponse({ success: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
+
+// ─── V2 Meeting Copilot message routing ─────────────────────────────────────
+// The service worker is the hub: sidebar → worker → offscreen for audio,
+// and worker broadcasts transcript/suggestion updates out to content scripts.
+
+let activeSessionId: string | null = null;
+let activeMeetTabId: number | null = null;
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg !== "object") return false;
+  const m = msg as { type: string; session_id?: string; tabId?: number; payload?: unknown };
+
+  if (m.type === "MC_START_SESSION") {
+    activeSessionId = m.session_id || `mc-${Date.now()}`;
+    activeMeetTabId = m.tabId ?? sender.tab?.id ?? null;
+
+    // When the user clicks "Start copilot" from the in-Meet prompt (sender.tab
+    // is the Meet tab), do NOT pop open the side panel — the user wants the
+    // transponder to be the only UI. Instead spin up the live agents inside
+    // the service worker so sentiment / coach / agenda still flow without
+    // requiring the sidebar to be open.
+    const fromContent = Boolean(sender.tab);
+    if (fromContent && activeMeetTabId) {
+      const p = (m.payload || {}) as { meeting_title?: string; meeting_url?: string };
+      startBgOrchestrator({
+        sessionId: activeSessionId,
+        tabId: activeMeetTabId,
+        meetingTitle: p.meeting_title,
+        meetingUrl: p.meeting_url,
+      });
+    }
+
+    startAudioForSession({ sessionId: activeSessionId, tabId: activeMeetTabId ?? undefined })
+      .then((r) => sendResponse(r))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  if (m.type === "MC_STOP_SESSION") {
+    const sid = activeSessionId;
+    activeSessionId = null;
+    const tabId = activeMeetTabId;
+    activeMeetTabId = null;
+    stopBgOrchestrator();
+    stopAudio().then(() => {
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: "MC_TRANSPONDER_CLOSE" }).catch(() => { /* noop */ });
+      }
+      sendResponse({ ok: true, session_id: sid });
+    });
+    return true;
+  }
+
+  // Transcript updates come from the offscreen document. Relay to the Meet tab
+  // (so the transponder can animate the last segment) AND feed our background
+  // orchestrator so the live agents have something to chew on.
+  if (m.type === "MC_TRANSCRIPT_APPEND") {
+    bgAppendTranscript(m.payload as TranscriptSegment);
+    if (activeMeetTabId) {
+      chrome.tabs.sendMessage(activeMeetTabId, {
+        type: "MC_SESSION_UPDATED",
+        payload: { latest: m.payload },
+      }).catch(() => { /* noop */ });
+    }
+    // Sidebar listens on the same runtime channel; no fanout needed.
+    return false;
+  }
+
+  if (m.type === "MC_AUDIO_STATE") {
+    // Already broadcast; sidebar + transponder can subscribe.
+    return false;
+  }
+
+  return false;
+});
 
 // Keep service worker alive during active generation
 let keepAliveInterval: ReturnType<typeof setInterval> | null = null;

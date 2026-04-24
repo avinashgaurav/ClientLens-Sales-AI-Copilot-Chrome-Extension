@@ -2,7 +2,14 @@
   "manifest_version": 3,
   "name": "ClientLens – Sales Copilot",
   "version": "1.0.0",
-  "description": "AI-powered sales document generation and personalization for your team",
+  "description": "Live meeting copilot for sales — pitch generation, objection handling, on-screen transponder, and manual Zoho / Meet / Zoom integrations.",
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
 
   "permissions": [
     "activeTab",
@@ -12,7 +19,9 @@
     "sidePanel",
     "tabs",
     "notifications",
-    "contextMenus"
+    "contextMenus",
+    "tabCapture",
+    "offscreen"
   ],
 
   "host_permissions": [
@@ -25,6 +34,16 @@
     "https://api.groq.com/*",
     "https://api.anthropic.com/*",
     "https://generativelanguage.googleapis.com/*",
+    "https://api.deepgram.com/*",
+    "wss://api.deepgram.com/*",
+    "https://www.googleapis.com/*",
+    "https://*.zohoapis.com/*",
+    "https://*.zohoapis.in/*",
+    "https://*.zohoapis.eu/*",
+    "https://accounts.zoho.com/*",
+    "https://accounts.zoho.in/*",
+    "https://accounts.zoho.eu/*",
+    "https://meet.google.com/*",
     "http://localhost:11434/*",
     "https://logo.clearbit.com/*",
     "https://www.google.com/*",
@@ -41,6 +60,11 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["meet-transponder.js"],
       "run_at": "document_idle"
     }
   ],
@@ -74,7 +98,9 @@
       "profile",
       "https://www.googleapis.com/auth/presentations",
       "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/documents"
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly"
     ]
   }
 }

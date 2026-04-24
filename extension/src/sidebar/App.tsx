@@ -6,66 +6,129 @@ import { AssetPreview } from "./components/AssetPreview";
 import { CouncilRunner } from "./components/CouncilRunner";
 import { ResultPanel } from "./components/ResultPanel";
 import { LiveModeToggle } from "./components/LiveModeToggle";
-import { AuthGate } from "./components/AuthGate";
 import { DesignerPanel } from "./components/DesignerPanel";
 import { KnowledgeBasePanel } from "./components/KnowledgeBasePanel";
-import { Header } from "./components/Header";
+import { Header, openSettings } from "./components/Header";
 import { ModeSwitcher } from "./components/ModeSwitcher";
-import { EmailForm } from "./components/EmailForm";
-import { EmailResult } from "./components/EmailResult";
 import { ObjectionPanel } from "./components/ObjectionPanel";
+import { MeetingCopilotPanel } from "./components/MeetingCopilotPanel";
+import { OnboardingChecklist } from "./components/OnboardingChecklist";
+import { ErrorBanner } from "./components/ErrorBanner";
+import { isMeetingCopilotEnabled } from "../shared/meeting-copilot/feature-flag";
+import { listKB } from "../shared/utils/kb-storage";
+import { FileText, BookOpen, Radio } from "lucide-react";
 
-type AdminTab = "form" | "kb";
+type AdminTab = "form" | "kb" | "copilot";
+
+interface TabDef {
+  id: AdminTab;
+  label: string;
+  icon: React.ReactNode;
+  activeBg: string;
+  activeText: string;
+}
 
 export default function App() {
-  const { user, isGenerating, lastResult, error, flowStep, outputMode, lastEmail } = useAppStore();
+  const { user, setUser, isGenerating, lastResult, error, setError, flowStep, outputMode } = useAppStore();
   const { detectContext } = usePageContext();
   const [adminTab, setAdminTab] = useState<AdminTab>("form");
+  const [kbCount, setKbCount] = useState(0);
 
   useEffect(() => {
     detectContext();
+    listKB().then((entries) => setKbCount(entries.length)).catch(() => { /* ignore */ });
   }, []);
 
-  if (!user) {
-    return <AuthGate />;
-  }
+  // Auth is disabled — anyone who opens the extension is treated as a local
+  // admin user. Role-based gates downstream still work because `user.role`
+  // is populated.
+  useEffect(() => {
+    if (!user) {
+      setUser({
+        id: "local-user",
+        email: "local@clientlens.app",
+        name: "You",
+        role: "admin",
+      });
+    }
+  }, [user, setUser]);
+
+  if (!user) return null;
 
   const hasKBAccess = user.role === "admin" || user.role === "pmm" || user.role === "designer";
-  const showTabs = hasKBAccess;
+  const copilotOn = isMeetingCopilotEnabled();
+
+  const tabs: TabDef[] = [
+    {
+      id: "form",
+      label: "Generate",
+      icon: <FileText size={12} />,
+      activeBg: "bg-brand-orange",
+      activeText: "text-brand-black",
+    },
+    ...(hasKBAccess
+      ? [
+          {
+            id: "kb" as const,
+            label: "Knowledge",
+            icon: <BookOpen size={12} />,
+            activeBg: "bg-brand-blue",
+            activeText: "text-brand-cream",
+          },
+        ]
+      : []),
+    ...(copilotOn
+      ? [
+          {
+            id: "copilot" as const,
+            label: "Copilot",
+            icon: <Radio size={12} />,
+            activeBg: "bg-brand-green",
+            activeText: "text-brand-black",
+          },
+        ]
+      : []),
+  ];
+  const showTabs = tabs.length > 1;
 
   return (
-    <div className="flex flex-col h-screen bg-[#0d0d1a] text-slate-200 text-sm overflow-hidden">
+    <div className="flex flex-col h-screen bg-surface-0 text-ink text-sm overflow-hidden font-sans">
       <Header />
 
       {showTabs && (
-        <div className="px-3 pt-2">
-          <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1">
-            <button
-              onClick={() => setAdminTab("form")}
-              className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                adminTab === "form" ? "bg-violet-600 text-white" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Generate Pitch
-            </button>
-            <button
-              onClick={() => setAdminTab("kb")}
-              className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                adminTab === "kb" ? "bg-violet-600 text-white" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Knowledge Base
-            </button>
+        <div className="px-3 pt-2 pb-1 w-full max-w-[720px] mx-auto">
+          <div className="flex gap-1 bg-surface-1 border border-line p-1">
+            {tabs.map((t) => {
+              const active = adminTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setAdminTab(t.id)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium transition-colors ${
+                    active
+                      ? `${t.activeBg} ${t.activeText}`
+                      : "text-ink-3 hover:text-ink hover:bg-surface-2"
+                  }`}
+                >
+                  {t.icon}
+                  {t.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 w-full max-w-[720px] mx-auto">
         {error && (
-          <div className="bg-red-900/40 border border-red-500/50 rounded-lg px-3 py-2 text-red-300 text-xs">
-            {error}
-          </div>
+          <ErrorBanner
+            message={error}
+            onDismiss={() => setError(null)}
+            onOpenSettings={openSettings}
+          />
         )}
+
+        <OnboardingChecklist kbCount={kbCount} onOpenSettings={openSettings} />
 
         {(!showTabs || adminTab === "form") && (
           <>
@@ -78,13 +141,6 @@ export default function App() {
                 {flowStep === "preview" && <AssetPreview />}
                 {(flowStep === "generating" || isGenerating) && <CouncilRunner />}
                 {flowStep === "result" && lastResult && <ResultPanel result={lastResult} />}
-              </>
-            )}
-
-            {outputMode === "email" && (
-              <>
-                {isGenerating && <CouncilRunner />}
-                {!isGenerating && (lastEmail ? <EmailResult /> : <EmailForm />)}
               </>
             )}
 
@@ -103,6 +159,8 @@ export default function App() {
             {(user.role === "designer" || user.role === "admin" || user.role === "pmm") && <DesignerPanel />}
           </>
         )}
+
+        {copilotOn && adminTab === "copilot" && <MeetingCopilotPanel />}
       </div>
     </div>
   );

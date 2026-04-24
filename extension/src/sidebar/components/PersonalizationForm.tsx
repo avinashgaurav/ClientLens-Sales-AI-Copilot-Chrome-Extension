@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Sparkles, Loader2, Search } from "lucide-react";
+import { Sparkles, Loader2, Search, Presentation, FileText, BookOpen, BarChart3, Wand2 } from "lucide-react";
 import { useAppStore } from "../stores/app-store";
 import { fetchBrandAssets } from "../../shared/utils/brand-assets";
 import type {
@@ -7,6 +7,7 @@ import type {
   MeetingStage,
   DealSizeBand,
   CloudProvider,
+  PitchFormat,
 } from "../../shared/types";
 
 const STAGES: { value: MeetingStage; label: string }[] = [
@@ -30,6 +31,14 @@ const CLOUDS: { value: CloudProvider; label: string }[] = [
   { value: "azure", label: "Azure" },
 ];
 
+const FORMATS: { value: PitchFormat; label: string; sub: string; icon: React.ReactNode }[] = [
+  { value: "on_screen_ppt", label: "On-screen / PPT", sub: "Slide-sized cards for live calls", icon: <Presentation size={12} /> },
+  { value: "one_pager", label: "One-pager", sub: "Single dense exec summary", icon: <FileText size={12} /> },
+  { value: "detailed_doc", label: "Detailed doc", sub: "Long-form, multi-section", icon: <BookOpen size={12} /> },
+  { value: "analysis", label: "Analysis", sub: "ROI, positioning, risk", icon: <BarChart3 size={12} /> },
+  { value: "custom_doc", label: "Custom doc", sub: "Auto-detect or describe below", icon: <Wand2 size={12} /> },
+];
+
 export function PersonalizationForm() {
   const {
     setPersonalization,
@@ -48,6 +57,8 @@ export function PersonalizationForm() {
   const [region, setRegion] = useState("");
   const [competitor, setCompetitor] = useState("");
   const [pains, setPains] = useState("");
+  const [pitchFormat, setPitchFormat] = useState<PitchFormat>("on_screen_ppt");
+  const [customHint, setCustomHint] = useState("");
   const [fetching, setFetching] = useState(false);
 
   const canSubmit = company.trim() && role.trim() && dealSize;
@@ -69,6 +80,9 @@ export function PersonalizationForm() {
       region: region.trim() || undefined,
       competitor: competitor.trim() || undefined,
       pain_points: pains.trim() || undefined,
+      pitch_format: pitchFormat,
+      pitch_format_custom_hint:
+        pitchFormat === "custom_doc" && customHint.trim() ? customHint.trim() : undefined,
     };
 
     setPersonalization(input);
@@ -89,10 +103,57 @@ export function PersonalizationForm() {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-slate-100 mb-1">Personalize this deck</h2>
-        <p className="text-xs text-slate-500">
+        <h2 className="text-sm font-semibold text-ink">Personalize this pitch</h2>
+        <p className="text-[11px] text-ink-4 mt-0.5">
           Fill required fields. Optional fields sharpen personalization.
         </p>
+      </div>
+
+      <div>
+        <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4 mb-1.5">
+          Output format
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {FORMATS.map((f) => {
+            const active = pitchFormat === f.value;
+            return (
+              <button
+                key={f.value}
+                type="button"
+                onClick={() => setPitchFormat(f.value)}
+                className={`text-left p-2 border transition-colors ${
+                  active
+                    ? "border-brand-orange bg-brand-orange/10"
+                    : "border-line bg-surface-2 hover:border-line-2"
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className={active ? "text-brand-orange" : "text-ink-3"}>{f.icon}</span>
+                  <span className="text-[11px] font-semibold text-ink">{f.label}</span>
+                </div>
+                <div className="text-[10px] text-ink-4 mt-0.5 leading-snug">{f.sub}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        {pitchFormat === "custom_doc" && (
+          <div className="mt-2 border border-line bg-surface-1 p-2">
+            <label className="block text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4 mb-1">
+              Describe the doc <span className="text-ink-4 normal-case tracking-normal font-sans">(optional)</span>
+            </label>
+            <textarea
+              value={customHint}
+              onChange={(e) => setCustomHint(e.target.value)}
+              rows={2}
+              placeholder="e.g. RFP response · security questionnaire · partner brief · proposal — leave blank to auto-detect from the open tab and KB."
+              className="w-full border border-line bg-surface-0 px-2 py-1.5 text-[11px] font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange resize-y"
+            />
+            <div className="text-[10px] text-ink-4 mt-1 leading-snug">
+              Skip this and the orchestrator infers the doc shape from the page you're on, the persona, and KB hits.
+            </div>
+          </div>
+        )}
       </div>
 
       <Field label="Company name" required>
@@ -101,7 +162,7 @@ export function PersonalizationForm() {
           value={company}
           onChange={(e) => setCompany(e.target.value)}
           placeholder="e.g. Coca-Cola"
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
         />
       </Field>
 
@@ -111,7 +172,7 @@ export function PersonalizationForm() {
           value={role}
           onChange={(e) => setRole(e.target.value)}
           placeholder="CFO"
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
         />
       </Field>
 
@@ -119,7 +180,7 @@ export function PersonalizationForm() {
         <select
           value={dealSize}
           onChange={(e) => setDealSize(e.target.value as DealSizeBand | "")}
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs text-ink focus:outline-none focus:border-brand-orange"
         >
           <option value="">Select…</option>
           {DEAL_SIZES.map((d) => (
@@ -128,15 +189,15 @@ export function PersonalizationForm() {
         </select>
       </Field>
 
-      <div className="pt-2 border-t border-slate-800">
-        <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-2">Optional</p>
+      <div className="pt-2 border-t border-line">
+        <p className="text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4 mb-2">Optional</p>
       </div>
 
       <Field label="Meeting stage">
         <select
           value={stage}
           onChange={(e) => setStage(e.target.value as MeetingStage | "")}
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs text-ink focus:outline-none focus:border-brand-orange"
         >
           <option value="">Defaults to Discovery</option>
           {STAGES.map((s) => (
@@ -146,16 +207,16 @@ export function PersonalizationForm() {
       </Field>
 
       <Field label="Primary cloud(s)">
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
           {CLOUDS.map((c) => (
             <button
               key={c.value}
               type="button"
               onClick={() => toggleCloud(c.value)}
-              className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              className={`flex-1 px-3 py-1.5 text-xs font-medium border transition-colors ${
                 clouds.includes(c.value)
-                  ? "bg-violet-600 border-violet-500 text-white"
-                  : "bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600"
+                  ? "bg-brand-orange text-brand-black border-brand-orange"
+                  : "bg-surface-2 border-line text-ink-3 hover:border-line-2"
               }`}
             >
               {c.label}
@@ -170,7 +231,7 @@ export function PersonalizationForm() {
           value={region}
           onChange={(e) => setRegion(e.target.value)}
           placeholder="e.g. India-Mumbai, EU, US, Global"
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
         />
       </Field>
 
@@ -180,7 +241,7 @@ export function PersonalizationForm() {
           value={competitor}
           onChange={(e) => setCompetitor(e.target.value)}
           placeholder="e.g. CloudHealth, Spot.io, Cast.ai"
-          className="input"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
         />
       </Field>
 
@@ -190,11 +251,11 @@ export function PersonalizationForm() {
           onChange={(e) => setPains(e.target.value)}
           placeholder="Short notes — anything the rep has heard from the buyer"
           rows={3}
-          className="input resize-none"
+          className="w-full border border-line bg-surface-1 px-2.5 py-2 text-xs text-ink placeholder-ink-4 resize-none focus:outline-none focus:border-brand-orange"
         />
       </Field>
 
-      <label className="flex items-start gap-2 cursor-pointer bg-cyan-900/20 border border-cyan-700/40 rounded-lg px-3 py-2">
+      <label className="flex items-start gap-2 cursor-pointer bg-brand-blue/10 border border-brand-blue/40 px-3 py-2">
         <input
           type="checkbox"
           checked={deepResearchEnabled}
@@ -203,10 +264,10 @@ export function PersonalizationForm() {
         />
         <div className="flex-1">
           <div className="flex items-center gap-1.5">
-            <Search size={11} className="text-cyan-400" />
-            <span className="text-xs text-slate-200 font-medium">Deep research</span>
+            <Search size={11} className="text-brand-blue" />
+            <span className="text-xs text-ink font-medium">Deep research</span>
           </div>
-          <span className="text-[10px] text-slate-400">
+          <span className="text-[10px] text-ink-4">
             Fetch the prospect's homepage and distill tech stack, customers, and recent signals before drafting. Slower but sharper.
           </span>
         </div>
@@ -215,7 +276,7 @@ export function PersonalizationForm() {
       <button
         type="submit"
         disabled={!canSubmit || fetching}
-        className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
+        className="w-full py-2.5 bg-brand-orange text-brand-black disabled:bg-surface-3 disabled:text-ink-4 font-semibold transition-all flex items-center justify-center gap-2 hover:shadow-hover-orange"
       >
         {fetching ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
         {fetching ? "Fetching brand assets…" : "Continue"}
@@ -237,12 +298,12 @@ function Field({
 }) {
   return (
     <label className="block space-y-1">
-      <span className="text-xs text-slate-300 font-medium">
+      <span className="text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4">
         {label}
-        {required && <span className="text-violet-400 ml-0.5">*</span>}
+        {required && <span className="text-brand-orange ml-1">*</span>}
       </span>
       {children}
-      {hint && <span className="block text-[10px] text-slate-500">{hint}</span>}
+      {hint && <span className="block text-[10px] text-ink-4">{hint}</span>}
     </label>
   );
 }

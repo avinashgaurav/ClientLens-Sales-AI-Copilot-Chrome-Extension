@@ -231,6 +231,8 @@ export type DealSizeBand = "lt_100k" | "100k_1m" | "gt_1m";
 
 export type CloudProvider = "aws" | "gcp" | "azure";
 
+export type PitchFormat = "on_screen_ppt" | "one_pager" | "detailed_doc" | "analysis" | "custom_doc";
+
 export interface PersonalizationInput {
   // Required
   company_name: string;
@@ -242,6 +244,13 @@ export interface PersonalizationInput {
   region?: string;
   competitor?: string;
   pain_points?: string;
+  pitch_format?: PitchFormat;
+  /**
+   * Free-form hint when pitch_format = "custom_doc". Optional — when blank,
+   * the orchestrator infers the doc shape from the surrounding context
+   * (open tab, persona, pain points, KB hits).
+   */
+  pitch_format_custom_hint?: string;
 }
 
 export interface BrandAssets {
@@ -349,4 +358,189 @@ export interface ExtensionMessage {
   type: ExtensionMessageType;
   payload?: unknown;
   tabId?: number;
+}
+
+// ─── V2: Meeting Copilot ─────────────────────────────────────────────────────
+
+export type MeetingPlatform = "google_meet" | "zoom_web" | "teams_web" | "other";
+
+export type MeetingSessionStatus =
+  | "idle"
+  | "preparing"
+  | "listening"
+  | "paused"
+  | "ended"
+  | "error";
+
+export type TranscriptSpeaker = "rep" | "prospect" | "unknown";
+
+export interface TranscriptSegment {
+  id: string;
+  speaker: TranscriptSpeaker;
+  text: string;
+  ts_start: number; // ms since session start
+  ts_end: number;
+  confidence?: number;
+  is_final: boolean;
+}
+
+export type SentimentLabel = "positive" | "neutral" | "negative" | "mixed";
+
+export interface SentimentSnapshot {
+  id: string;
+  captured_at: number; // ms since session start
+  prospect: SentimentLabel;
+  rep: SentimentLabel;
+  energy: "low" | "medium" | "high";
+  engagement: "low" | "medium" | "high";
+  signals: string[]; // e.g. ["skeptical", "price-sensitive", "excited"]
+  rationale?: string;
+}
+
+export type AgendaItemStatus = "pending" | "in_progress" | "covered" | "skipped";
+
+export interface AgendaItem {
+  id: string;
+  title: string;
+  description?: string;
+  priority: "must_cover" | "should_cover" | "nice_to_have";
+  status: AgendaItemStatus;
+  covered_at_ms?: number;
+  evidence_segment_ids?: string[];
+}
+
+export type CoachSuggestionKind =
+  | "say_next"
+  | "avoid"
+  | "ask_question"
+  | "handle_objection"
+  | "cover_agenda"
+  | "kb_answer"
+  | "sentiment_shift";
+
+export interface CoachSuggestion {
+  id: string;
+  kind: CoachSuggestionKind;
+  title: string;
+  body: string;
+  urgency: "low" | "medium" | "high";
+  created_at: number; // ms since session start
+  expires_at?: number;
+  sources?: { kb_entry_id: string; quote: string }[];
+  trigger_segment_id?: string;
+  dismissed?: boolean;
+  acted_on?: boolean;
+  // Trust layer — filled by council validator and the coach prompt.
+  rationale?: string;      // why the coach raised this ("prospect hesitated on timeline")
+  confidence?: number;     // 0..1 from validator; drives visual treatment
+}
+
+// Emitted by the orchestrator when the live validator rejects a coach
+// suggestion. Surfaced on the transponder as a faint "blocked" pill so reps
+// see the system working instead of silently dropping ideas.
+export interface CoachRejection {
+  id: string;
+  created_at: number;
+  title: string;
+  body: string;
+  kind: CoachSuggestionKind;
+  issues: string[];
+  confidence: number;
+}
+
+export interface CRMContext {
+  provider: "zoho" | "none";
+  account_id?: string;
+  account_name?: string;
+  deal_id?: string;
+  deal_name?: string;
+  deal_stage?: string;
+  deal_amount?: number;
+  contact_ids?: string[];
+  last_note_preview?: string;
+  notes_url?: string;
+}
+
+export interface CalendarAttendee {
+  email: string;
+  name?: string;
+  domain?: string;
+  is_organizer?: boolean;
+  response_status?: "accepted" | "declined" | "tentative" | "needsAction";
+}
+
+export interface CalendarEvent {
+  id: string;
+  provider: "google";
+  title: string;
+  description?: string;
+  start: string; // ISO
+  end: string; // ISO
+  meeting_url?: string;
+  platform?: MeetingPlatform;
+  attendees: CalendarAttendee[];
+  organizer_email?: string;
+}
+
+export interface MeetingSessionInput {
+  company_name: string;
+  persona_role: string;
+  deal_size?: DealSizeBand;
+  meeting_stage?: MeetingStage;
+  agenda: AgendaItem[];
+  calendar_event?: CalendarEvent;
+  crm_context?: CRMContext;
+  icp_role?: ICPRole;
+  meeting_title?: string;
+  meeting_notes?: string;
+}
+
+export interface MeetingSession {
+  id: string;
+  status: MeetingSessionStatus;
+  started_at?: string; // ISO
+  ended_at?: string;
+  platform: MeetingPlatform;
+  tab_id?: number;
+  input: MeetingSessionInput;
+  transcript: TranscriptSegment[];
+  sentiment_history: SentimentSnapshot[];
+  suggestions: CoachSuggestion[];
+  agenda: AgendaItem[];
+  error?: string;
+}
+
+export type MeetingCopilotMessageType =
+  | "MC_START_SESSION"
+  | "MC_STOP_SESSION"
+  | "MC_SESSION_UPDATED"
+  | "MC_TRANSCRIPT_APPEND"
+  | "MC_SUGGESTION_PUSH"
+  | "MC_SENTIMENT_UPDATE"
+  | "MC_AGENDA_UPDATE"
+  | "MC_ASK_KB"
+  | "MC_KB_ANSWER"
+  | "MC_TRANSPONDER_OPEN"
+  | "MC_TRANSPONDER_CLOSE"
+  | "MC_AUDIO_CHUNK"
+  | "MC_AUDIO_STATE";
+
+export interface MeetingCopilotMessage {
+  type: MeetingCopilotMessageType;
+  session_id?: string;
+  payload?: unknown;
+  tabId?: number;
+}
+
+export interface MeetingPostCallSummary {
+  session_id: string;
+  headline: string;
+  what_went_well: string[];
+  what_to_improve: string[];
+  objections_raised: { objection: string; response_quality: "good" | "weak" | "missed" }[];
+  action_items: { owner: "rep" | "prospect"; text: string; due?: string }[];
+  agenda_coverage: { item: string; status: AgendaItemStatus }[];
+  suggested_followup_email?: EmailDraft;
+  suggested_crm_note?: string;
+  generated_at: string;
 }

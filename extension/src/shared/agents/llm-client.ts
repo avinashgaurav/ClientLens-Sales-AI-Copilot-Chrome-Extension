@@ -4,8 +4,9 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { bumpUsage, getSettings } from "../utils/settings-storage";
 
-export type LLMProvider = "anthropic" | "groq" | "ollama" | "gemini";
+export type LLMProvider = "anthropic" | "groq" | "ollama" | "gemini" | "custom";
 
 export interface LLMConfig {
   provider: LLMProvider;
@@ -20,15 +21,48 @@ const OLLAMA_MODEL = "llama3.1:8b";
 const OLLAMA_BASE = "http://localhost:11434";
 const GEMINI_MODEL = "gemini-2.0-flash";
 
+function envKey(name: string): string {
+  const v = (import.meta.env as Record<string, string | undefined>)[name] ?? "";
+  if (!v || v.includes("YOUR_KEY")) return "";
+  return v;
+}
+
+/**
+ * Translate a raw upstream error body into a concise user-facing message.
+ * Credential / quota / rate-limit failures get a hint pointing to Settings;
+ * everything else falls through as a trimmed raw message.
+ */
+function friendlyLLMError(provider: string, status: number, body: string): Error {
+  const text = body.toLowerCase();
+  const isAuth =
+    status === 401 ||
+    status === 403 ||
+    text.includes("api_key_invalid") ||
+    text.includes("api key not valid") ||
+    text.includes("invalid api key") ||
+    text.includes("incorrect api key") ||
+    text.includes("authentication") ||
+    text.includes("unauthorized");
+  const isQuota =
+    status === 429 || text.includes("quota") || text.includes("rate limit") || text.includes("insufficient_quota");
+
+  if (isAuth) {
+    return new Error(`${provider} API key is invalid. Open Settings → Advanced · Model provider and paste a working key.`);
+  }
+  if (isQuota) {
+    return new Error(`${provider} rate limit or quota hit. Wait a moment or switch provider in Settings.`);
+  }
+  return new Error(`${provider} ${status}: ${body.slice(0, 200)}`);
+}
+
 export function resolveLLMConfig(override?: { provider: LLMProvider; model: string }): LLMConfig | { error: string } {
-  const provider = (override?.provider ?? import.meta.env.VITE_LLM_PROVIDER ?? "anthropic") as LLMProvider;
+  const settings = getSettings();
+  const provider = (override?.provider ?? settings.provider ?? import.meta.env.VITE_LLM_PROVIDER ?? "gemini") as LLMProvider;
   const modelOverride = override?.model;
 
   if (provider === "gemini") {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY ?? "";
-    if (!apiKey || apiKey.includes("YOUR_KEY")) {
-      return { error: "Set VITE_GEMINI_API_KEY in extension/.env.local" };
-    }
+    const apiKey = settings.geminiKey || envKey("VITE_GEMINI_API_KEY");
+    if (!apiKey) return { error: "Add a Gemini API key in Settings." };
     return { provider, apiKey, model: modelOverride ?? import.meta.env.VITE_GEMINI_MODEL ?? GEMINI_MODEL };
   }
 
@@ -42,22 +76,36 @@ export function resolveLLMConfig(override?: { provider: LLMProvider; model: stri
   }
 
   if (provider === "groq") {
-    const apiKey = import.meta.env.VITE_GROQ_API_KEY ?? "";
-    if (!apiKey || apiKey.includes("YOUR_KEY")) {
-      return { error: "Set VITE_GROQ_API_KEY in extension/.env.local" };
-    }
+    const apiKey = settings.groqKey || envKey("VITE_GROQ_API_KEY");
+    if (!apiKey) return { error: "Add a Groq API key in Settings." };
     return { provider, apiKey, model: modelOverride ?? GROQ_MODEL };
   }
 
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY ?? "";
-  if (!apiKey || apiKey.includes("YOUR_KEY")) {
-    return { error: "Set VITE_ANTHROPIC_API_KEY in extension/.env.local" };
+  if (provider === "custom") {
+    const apiKey = settings.customKey;
+    const baseUrl = settings.customBaseUrl;
+    const model = modelOverride ?? settings.customModel;
+    if (!baseUrl) return { error: "Add a custom endpoint URL in Settings." };
+    if (!model) return { error: "Add a custom model name in Settings." };
+    return { provider, apiKey, model, baseUrl };
   }
+
+  const apiKey = settings.anthropicKey || envKey("VITE_ANTHROPIC_API_KEY");
+  if (!apiKey) return { error: "Add an Anthropic API key in Settings." };
   return { provider: "anthropic", apiKey, model: modelOverride ?? ANTHROPIC_MODEL };
 }
 
 export interface LLMClient {
   call(system: string, user: string, maxTokens: number): Promise<string>;
+  // Streaming variant — `onDelta` is invoked with each text chunk as it arrives.
+  // Resolves with the full concatenated text. Providers without native
+  // streaming fall back to a single onDelta with the full string at the end.
+  callStream?(
+    system: string,
+    user: string,
+    maxTokens: number,
+    onDelta: (delta: string, full: string) => void,
+  ): Promise<string>;
 }
 
 class AnthropicClient implements LLMClient {
@@ -66,13 +114,43 @@ class AnthropicClient implements LLMClient {
     this.client = new Anthropic({ apiKey: cfg.apiKey, dangerouslyAllowBrowser: true });
   }
   async call(system: string, user: string, maxTokens: number): Promise<string> {
-    const res = await this.client.messages.create({
-      model: this.cfg.model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: user }],
-    });
-    return res.content[0]?.type === "text" ? res.content[0].text : "";
+    try {
+      const res = await this.client.messages.create({
+        model: this.cfg.model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }],
+      });
+      return res.content[0]?.type === "text" ? res.content[0].text : "";
+    } catch (err) {
+      const anyErr = err as { status?: number; message?: string };
+      throw friendlyLLMError("Claude", anyErr.status ?? 0, anyErr.message ?? String(err));
+    }
+  }
+  async callStream(
+    system: string,
+    user: string,
+    maxTokens: number,
+    onDelta: (delta: string, full: string) => void,
+  ): Promise<string> {
+    try {
+      let full = "";
+      const stream = this.client.messages.stream({
+        model: this.cfg.model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }],
+      });
+      stream.on("text", (delta: string) => {
+        full += delta;
+        try { onDelta(delta, full); } catch { /* listener errors must not abort the stream */ }
+      });
+      await stream.finalMessage();
+      return full;
+    } catch (err) {
+      const anyErr = err as { status?: number; message?: string };
+      throw friendlyLLMError("Claude", anyErr.status ?? 0, anyErr.message ?? String(err));
+    }
   }
 }
 
@@ -98,7 +176,7 @@ class GroqClient implements LLMClient {
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Groq ${res.status}: ${body.slice(0, 300)}`);
+      throw friendlyLLMError("Groq", res.status, body);
     }
     const data = (await res.json()) as { choices: { message: { content: string } }[] };
     return data.choices[0]?.message?.content ?? "";
@@ -125,7 +203,7 @@ class OllamaClient implements LLMClient {
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Ollama ${res.status}: ${body.slice(0, 300)}`);
+      throw friendlyLLMError("Ollama", res.status, body);
     }
     const data = (await res.json()) as { choices: { message: { content: string } }[] };
     return data.choices[0]?.message?.content ?? "";
@@ -154,7 +232,7 @@ class GeminiClient implements LLMClient {
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
+      throw friendlyLLMError("Gemini", res.status, body);
     }
     const data = (await res.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -163,9 +241,64 @@ class GeminiClient implements LLMClient {
   }
 }
 
+class CustomOpenAICompatClient implements LLMClient {
+  constructor(private cfg: LLMConfig) {}
+  async call(system: string, user: string, maxTokens: number): Promise<string> {
+    const base = (this.cfg.baseUrl ?? "").replace(/\/$/, "");
+    const url = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.cfg.apiKey) headers.Authorization = `Bearer ${this.cfg.apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: this.cfg.model,
+        max_tokens: maxTokens,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: `${system}\nRespond with a single JSON object. No prose, no markdown fences.` },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw friendlyLLMError("Custom provider", res.status, body);
+    }
+    const data = (await res.json()) as { choices: { message: { content: string } }[] };
+    return data.choices[0]?.message?.content ?? "";
+  }
+}
+
 export function makeLLMClient(cfg: LLMConfig): LLMClient {
-  if (cfg.provider === "gemini") return new GeminiClient(cfg);
-  if (cfg.provider === "ollama") return new OllamaClient(cfg);
-  if (cfg.provider === "groq") return new GroqClient(cfg);
-  return new AnthropicClient(cfg);
+  const inner: LLMClient =
+    cfg.provider === "gemini"
+      ? new GeminiClient(cfg)
+      : cfg.provider === "ollama"
+      ? new OllamaClient(cfg)
+      : cfg.provider === "groq"
+      ? new GroqClient(cfg)
+      : cfg.provider === "custom"
+      ? new CustomOpenAICompatClient(cfg)
+      : new AnthropicClient(cfg);
+  return {
+    async call(system, user, maxTokens) {
+      const out = await inner.call(system, user, maxTokens);
+      bumpUsage(cfg.provider);
+      return out;
+    },
+    async callStream(system, user, maxTokens, onDelta) {
+      let full: string;
+      if (inner.callStream) {
+        full = await inner.callStream(system, user, maxTokens, onDelta);
+      } else {
+        // Provider doesn't stream natively — fire one delta with the full text.
+        full = await inner.call(system, user, maxTokens);
+        try { onDelta(full, full); } catch { /* noop */ }
+      }
+      bumpUsage(cfg.provider);
+      return full;
+    },
+  };
 }

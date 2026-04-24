@@ -217,7 +217,25 @@ async function icpPersonalizationAgent(
   const icp = matchICP(input.persona_role);
   const usedSources = kb.filter((e) => retrieval.relevant_source_ids.includes(e.id));
 
-  const system = `You are the ICP Personalization Agent. Draft a ${icp.label}-tailored deck grounded ONLY in the cited sources. Use ClientLens product facts verbatim (317 rules, up to 60%, ISO 27001 + SOC 2 Type II, <5 min setup, 30-day pilot). Do NOT invent customer logos, savings figures, or quotes.`;
+  const format = input.pitch_format ?? "on_screen_ppt";
+  const customHint = input.pitch_format_custom_hint?.trim();
+  const formatDirective: Record<string, string> = {
+    on_screen_ppt:
+      "Output is for an on-screen slide deck projected during a live call. Every slide has a 6-word max headline, 3 short bullet lines, and a single takeaway. No dense paragraphs — a reader must absorb each slide in under 5 seconds.",
+    one_pager:
+      "Output is a single one-pager executive summary. Produce 4 tight sections (Problem, Why us, Proof, Next step). Each section is 2-3 sentences, scannable in 60 seconds, no bullet lists.",
+    detailed_doc:
+      "Output is a long-form doc with named sections: Context, Pain, Solution, Differentiators, Evidence, Implementation, Commercials, Next Steps. Paragraphs are allowed. Cite KB source_ids inline.",
+    analysis:
+      "Output is a data-led analysis. Lead with a headline metric. Include tables / pills of comparisons, an ROI calculation if inputs allow, competitive positioning vs the named competitor, and a risk section. No marketing puffery.",
+    custom_doc: customHint
+      ? `Output is a CUSTOM DOC. The user described it as: "${customHint}". Match that doc shape exactly — infer section headings, length, tone, and structure from that description. Use the persona, KB hits, and any prospect research as supporting evidence.`
+      : "Output is a CUSTOM DOC and the user did NOT describe it. AUTO-DETECT the right shape from the surrounding context: persona role, deal size, meeting stage, prospect research signals, and KB namespaces present. Pick ONE concrete shape (e.g. RFP response, security questionnaire reply, partner brief, exec memo, technical proposal) and execute it well. State the inferred shape in the first slide title.",
+  };
+
+  const system = `You are the ICP Personalization Agent. Draft a ${icp.label}-tailored deck grounded ONLY in the cited sources. Use ClientLens product facts verbatim (317 rules, up to 60%, ISO 27001 + SOC 2 Type II, <5 min setup, 30-day pilot). Do NOT invent customer logos, savings figures, or quotes.
+
+FORMAT: ${format.replace(/_/g, " ")}. ${formatDirective[format]}`;
 
   const user = `ICP: ${icp.label}
 Lead with: ${icp.content_rules.lead_with.join(", ")}
@@ -228,6 +246,7 @@ TARGET: ${input.company_name} — persona "${input.persona_role}"
 Stage: ${input.meeting_stage ?? "discovery"} · Deal: ${input.deal_size} · Clouds: ${input.clouds?.join(", ") ?? "AWS+GCP+Azure"}
 Region: ${input.region ?? "n/a"} · Competitor: ${input.competitor ?? "n/a"}
 Pain points: ${input.pain_points ?? "(none provided — infer from industry)"}
+Desired format: ${format.replace(/_/g, " ")}${customHint ? `\nCustom doc hint: ${customHint}` : ""}
 
 Brand accent (target): ${brandAssets.primary_color}
 ${brief ? `\nPROSPECT RESEARCH (use this to personalize — pattern-match to their actual tech stack / pain signals):\n${briefToPrompt(brief)}\n` : ""}

@@ -5,9 +5,9 @@
 
 import type { UserRole } from "../types";
 
-// Set this to your organization's Google Workspace domain (e.g. "example.com").
-// Leave as "example.com" to allow any email during local dev — tighten before deploying.
-export const ALLOWED_EMAIL_DOMAIN = "example.com";
+// Set this to your organization's Google Workspace domain.
+// Leave empty ("") to allow any signed-in Google account.
+export const ALLOWED_EMAIL_DOMAIN = "";
 
 // Hard-coded role map for known team members. Emails not listed here default
 // to "sales_rep". Edit this file to grant Admin / PMM / Designer rights.
@@ -20,6 +20,7 @@ export const ROLE_OVERRIDES: Record<string, UserRole> = {
 export const DEFAULT_ROLE: UserRole = "sales_rep";
 
 export function isAllowedEmail(email: string): boolean {
+  if (!ALLOWED_EMAIL_DOMAIN) return true;
   return email.toLowerCase().endsWith(`@${ALLOWED_EMAIL_DOMAIN}`);
 }
 

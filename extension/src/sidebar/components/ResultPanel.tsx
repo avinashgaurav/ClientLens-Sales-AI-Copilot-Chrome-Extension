@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Copy, ExternalLink, ChevronDown, ChevronUp, ShieldCheck, Undo2, Loader2, Plus } from "lucide-react";
-import type { PipelineResult } from "../../shared/types";
+import { Copy, ExternalLink, ChevronDown, ChevronUp, ShieldCheck, Undo2, Loader2, Plus, Presentation, FileText, BookOpen, BarChart3, Wand2 } from "lucide-react";
+import type { PipelineResult, PitchFormat, SlideContent } from "../../shared/types";
 import { useAppStore } from "../stores/app-store";
 
 interface Props {
@@ -19,7 +19,8 @@ export function ResultPanel({ result }: Props) {
   const [copied, setCopied] = useState(false);
   const [writing, setWriting] = useState(false);
   const [writeStatus, setWriteStatus] = useState<WriteResponse | null>(null);
-  const { setFlowStep, setLastResult } = useAppStore();
+  const { setFlowStep, setLastResult, personalization } = useAppStore();
+  const pitchFormat: PitchFormat = personalization?.pitch_format || "on_screen_ppt";
 
   function handleCopy() {
     navigator.clipboard.writeText(result.final_output.renderable_text);
@@ -123,12 +124,15 @@ export function ResultPanel({ result }: Props) {
             </div>
           )}
 
-          {/* Content preview */}
-          <div className="bg-slate-800 rounded-lg p-2.5 max-h-48 overflow-y-auto">
-            <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">
-              {result.final_output.renderable_text}
-            </pre>
-          </div>
+          {/* Format badge */}
+          <FormatBadge format={pitchFormat} />
+
+          {/* Content preview — format-aware */}
+          <FormatAwareRender
+            format={pitchFormat}
+            text={result.final_output.renderable_text}
+            slides={result.final_output.slides}
+          />
 
           {/* Slides count */}
           <div className="text-xs text-slate-500">
@@ -192,6 +196,87 @@ export function ResultPanel({ result }: Props) {
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+const FORMAT_META: Record<PitchFormat, { label: string; icon: React.ReactNode; hint: string }> = {
+  on_screen_ppt: { label: "On-screen / PPT", icon: <Presentation size={11} />, hint: "Slide-sized cards" },
+  one_pager: { label: "One-pager", icon: <FileText size={11} />, hint: "Exec summary" },
+  detailed_doc: { label: "Detailed doc", icon: <BookOpen size={11} />, hint: "Long-form sections" },
+  analysis: { label: "Analysis", icon: <BarChart3 size={11} />, hint: "Data-led" },
+  custom_doc: { label: "Custom doc", icon: <Wand2 size={11} />, hint: "Auto / described" },
+};
+
+function FormatBadge({ format }: { format: PitchFormat }) {
+  const meta = FORMAT_META[format];
+  return (
+    <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+      <span className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded">
+        {meta.icon} {meta.label}
+      </span>
+      <span className="text-slate-500">{meta.hint}</span>
+    </div>
+  );
+}
+
+function FormatAwareRender({
+  format,
+  text,
+  slides,
+}: {
+  format: PitchFormat;
+  text: string;
+  slides: SlideContent[];
+}) {
+  if (format === "on_screen_ppt" && slides.length > 0) {
+    return (
+      <div className="space-y-2 max-h-72 overflow-y-auto">
+        {slides.map((s) => (
+          <div key={s.index} className="bg-slate-800 rounded-lg p-2.5 border border-slate-700">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Slide {s.index + 1}</div>
+            <div className="text-xs font-semibold text-slate-100 mb-1.5">{s.title}</div>
+            <div className="space-y-1">
+              {s.components.map((c, i) => (
+                <div key={i} className="text-[11px] text-slate-300 whitespace-pre-wrap leading-relaxed">
+                  {typeof c.content === "string" ? c.content : JSON.stringify(c.content)}
+                </div>
+              ))}
+            </div>
+            {s.speaker_notes && (
+              <div className="mt-2 pt-2 border-t border-slate-700 text-[10px] text-slate-500 italic">
+                Notes: {s.speaker_notes}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (format === "detailed_doc") {
+    const sections = text.split(/\n(?=#{1,3}\s)/g);
+    return (
+      <div className="bg-slate-800 rounded-lg p-3 max-h-72 overflow-y-auto space-y-3">
+        {sections.map((sec, i) => (
+          <div key={i} className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+            {sec.trim()}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // one_pager + analysis (and fallback) → single block, but analysis gets mono font
+  return (
+    <div className="bg-slate-800 rounded-lg p-2.5 max-h-72 overflow-y-auto">
+      <pre
+        className={`text-xs whitespace-pre-wrap leading-relaxed ${
+          format === "analysis" ? "text-slate-200 font-mono" : "text-slate-300"
+        }`}
+      >
+        {text}
+      </pre>
     </div>
   );
 }

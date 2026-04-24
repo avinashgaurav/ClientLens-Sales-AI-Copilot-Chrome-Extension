@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Zap, Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../stores/app-store";
 import { signInWithGoogle } from "../../shared/auth/google-sso";
 import { ALLOWED_EMAIL_DOMAIN } from "../../shared/auth/team-config";
@@ -34,46 +34,57 @@ export function AuthGate() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#0d0d1a] text-slate-200 items-center justify-center px-6">
+    <div className="flex flex-col h-screen bg-surface-0 text-ink items-center justify-center px-6 font-sans">
       <div className="w-full max-w-xs space-y-6">
         <div className="text-center">
-          <div className="w-12 h-12 bg-violet-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
-            <Zap size={24} className="text-white" />
+          <div className="w-14 h-14 bg-brand-orange flex items-center justify-center mx-auto mb-4">
+            <span className="text-xl font-bold text-brand-black font-mono">CL</span>
           </div>
-          <h1 className="text-lg font-bold text-slate-100">ClientLens</h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Internal tool — restricted to @{ALLOWED_EMAIL_DOMAIN} accounts
+          <h1 className="text-xl font-bold text-ink tracking-[-0.03em]">ClientLens</h1>
+          <p className="text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4 mt-1">
+            Sales Copilot
+          </p>
+          <p className="text-xs text-ink-3 mt-3 leading-relaxed">
+            {ALLOWED_EMAIL_DOMAIN ? (
+              <>
+                Internal tool. Sign-in is restricted to{" "}
+                <span className="text-ink-2 font-mono">@{ALLOWED_EMAIL_DOMAIN}</span> accounts.
+              </>
+            ) : (
+              "Sign in with any Google Workspace account."
+            )}
           </p>
         </div>
 
         {error && (
-          <div className="flex items-start gap-2 bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2">
-            <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-            <p className="text-xs text-red-300">{error}</p>
+          <div className="flex items-start gap-2 bg-[rgba(248,113,113,0.08)] border border-[rgba(248,113,113,0.4)] px-3 py-2">
+            <AlertTriangle size={13} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-red-400 leading-relaxed">{error}</p>
           </div>
         )}
 
         <button
           onClick={handleGoogleSignIn}
           disabled={loading}
-          className="w-full py-2.5 bg-white hover:bg-slate-100 disabled:bg-slate-300 text-slate-900 font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
+          className="w-full py-2.5 bg-brand-cream hover:shadow-hover-ink disabled:opacity-60 text-brand-black font-semibold transition-all flex items-center justify-center gap-2 text-sm"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <GoogleMark />}
           {loading ? "Signing in…" : "Sign in with Google"}
         </button>
 
-        <div className="flex items-start gap-2 text-[11px] text-slate-500">
-          <ShieldCheck size={12} className="text-emerald-400 mt-0.5 shrink-0" />
+        <div className="flex items-start gap-2 text-[11px] text-ink-4 leading-relaxed">
+          <ShieldCheck size={12} className="text-brand-green mt-0.5 shrink-0" />
           <p>
-            Uses your @{ALLOWED_EMAIL_DOMAIN} Google Workspace account. The extension never sees your password —
-            sign-in goes through Google's standard OAuth flow.
+            Signs you in with your <span className="font-mono text-ink-3">@{ALLOWED_EMAIL_DOMAIN}</span>{" "}
+            Google Workspace account through Google's standard OAuth flow. The extension never
+            sees your password.
           </p>
         </div>
 
         {IS_PREVIEW && (
           <button
             onClick={handlePreview}
-            className="w-full py-2 text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+            className="w-full py-2 text-[11px] text-ink-4 hover:text-ink-2 underline underline-offset-4"
           >
             Preview mode (skip sign-in)
           </button>
