@@ -20,6 +20,7 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const OLLAMA_MODEL = "llama3.1:8b";
 const OLLAMA_BASE = "http://localhost:11434";
 const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_EMBED_MODEL = "text-embedding-004"; // 768 dims, free tier
 
 function envKey(name: string): string {
   const v = (import.meta.env as Record<string, string | undefined>)[name] ?? "";
@@ -57,7 +58,7 @@ function friendlyLLMError(provider: string, status: number, body: string): Error
 
 export function resolveLLMConfig(override?: { provider: LLMProvider; model: string }): LLMConfig | { error: string } {
   const settings = getSettings();
-  const provider = (override?.provider ?? settings.provider ?? import.meta.env.VITE_LLM_PROVIDER ?? "gemini") as LLMProvider;
+  const provider = (override?.provider ?? settings.provider ?? import.meta.env.VITE_LLM_PROVIDER ?? "custom") as LLMProvider;
   const modelOverride = override?.model;
 
   if (provider === "gemini") {
@@ -269,6 +270,82 @@ class CustomOpenAICompatClient implements LLMClient {
     const data = (await res.json()) as { choices: { message: { content: string } }[] };
     return data.choices[0]?.message?.content ?? "";
   }
+}
+
+// ─── Gemini embeddings ────────────────────────────────────────────────────────
+//
+// Embeddings use Gemini regardless of the active chat provider. The Gemini
+// free tier covers our scale (a few thousand embed calls/day) and the user
+// already has a Gemini key wired up. Keeping a separate code path here means
+// switching the chat provider doesn't break vector retrieval.
+
+export const EMBEDDING_DIMS = 768;
+
+function geminiEmbedKey(): string {
+  const settings = getSettings();
+  return settings.geminiKey || envKey("VITE_GEMINI_API_KEY") || "";
+}
+
+/**
+ * Embed a single string with Gemini text-embedding-004. Returns 768 floats.
+ * Throws a friendlyLLMError-style message on credential / quota failures.
+ */
+export async function embedText(text: string): Promise<number[]> {
+  const apiKey = geminiEmbedKey();
+  if (!apiKey) throw new Error("Add a Gemini API key in Settings to enable semantic KB search.");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBED_MODEL}:embedContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      content: { parts: [{ text }] },
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw friendlyLLMError("Gemini embed", res.status, body);
+  }
+  const data = (await res.json()) as { embedding?: { values?: number[] } };
+  const vec = data.embedding?.values;
+  if (!vec || !Array.isArray(vec)) throw new Error("Gemini embed returned no vector");
+  return vec;
+}
+
+/**
+ * Embed many strings. Gemini's batchEmbedContents accepts up to 100 requests
+ * per call. We batch internally so callers can pass an arbitrary list.
+ */
+export async function embedTexts(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const apiKey = geminiEmbedKey();
+  if (!apiKey) throw new Error("Add a Gemini API key in Settings to enable semantic KB search.");
+  const out: number[][] = [];
+  const BATCH = 100;
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const slice = texts.slice(i, i + BATCH);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBED_MODEL}:batchEmbedContents`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        requests: slice.map((t) => ({
+          model: `models/${GEMINI_EMBED_MODEL}`,
+          content: { parts: [{ text: t }] },
+        })),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw friendlyLLMError("Gemini embed", res.status, body);
+    }
+    const data = (await res.json()) as { embeddings?: { values?: number[] }[] };
+    const vecs = data.embeddings ?? [];
+    for (const v of vecs) {
+      if (!v.values || !Array.isArray(v.values)) throw new Error("Gemini embed returned a malformed vector");
+      out.push(v.values);
+    }
+  }
+  return out;
 }
 
 export function makeLLMClient(cfg: LLMConfig): LLMClient {

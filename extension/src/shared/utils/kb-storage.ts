@@ -73,6 +73,18 @@ export async function removeKB(id: string): Promise<void> {
   await writeAll(all.filter((e) => e.id !== id));
 }
 
+/** Patch a single entry in place. Used by the indexer to write index_status. */
+export async function updateKB(id: string, patch: Partial<KBEntry>): Promise<void> {
+  const all = await readAll();
+  let changed = false;
+  const next = all.map((e) => {
+    if (e.id !== id) return e;
+    changed = true;
+    return { ...e, ...patch };
+  });
+  if (changed) await writeAll(next);
+}
+
 export function namespaceLabel(ns: KBNamespace): string {
   const labels: Record<KBNamespace, string> = {
     product_overview: "Product Overview",

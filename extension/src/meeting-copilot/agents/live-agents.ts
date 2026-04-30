@@ -6,7 +6,7 @@
 // Each agent is a pure function over (session state, KB) that returns
 // an incremental update. Orchestration cadence lives in live-orchestrator.ts.
 
-import { makeLLMClient, resolveLLMConfig, type LLMProvider } from "../../shared/agents/llm-client";
+import { embedText, makeLLMClient, resolveLLMConfig, type LLMProvider } from "../../shared/agents/llm-client";
 import type {
   AgendaItem,
   CoachSuggestion,
@@ -15,6 +15,8 @@ import type {
   TranscriptSegment,
   KBEntry,
 } from "../../shared/types";
+import { searchChunks, type SearchHit } from "../../shared/utils/kb-vector-store";
+import { computeWikiCoachMap } from "../../shared/utils/wiki-index";
 
 const WINDOW_CHARS = 2400;
 // Live agents (coach + sentiment) only need the last few turns to stay in
@@ -103,6 +105,98 @@ async function callLiveLLM(
   const client = makeLLMClient(cfg);
   if (onDelta && client.callStream) return client.callStream(system, user, maxTokens, onDelta);
   return client.call(system, user, maxTokens);
+}
+
+// ─── KB retrieval (semantic + lexical fallback) ─────────────────────────────
+//
+// Three consumers (coach, validator, Ask KB) all need "give me the top-K most
+// relevant KB excerpts for this query." Behaviour:
+//   1. Embed query via Gemini, cosine-search the IndexedDB chunk store.
+//   2. For any KBEntry whose index_status !== "ready", fall back to a cheap
+//      lexical match against raw `content` so the rep doesn't lose access to
+//      un-indexed entries (e.g. just-uploaded files mid-call).
+//   3. If the embed call itself throws (no Gemini key, quota hit), degrade
+//      gracefully to pure lexical for the whole KB.
+//
+// Returns objects shaped like the LLM-prompt snippets we used to build by
+// hand, so the call sites just JSON.stringify the result.
+
+export interface RetrievedSnippet {
+  id: string;            // kb_entry_id (carries through to source citations)
+  name: string;
+  namespace: string;
+  excerpt: string;
+  score?: number;        // cosine score when from vector store; lexical = match count
+}
+
+function lexicalFallback(query: string, entries: KBEntry[], topK: number, maxChars: number): RetrievedSnippet[] {
+  const terms = query.toLowerCase().split(/\W+/).filter((t) => t.length > 3);
+  if (terms.length === 0) {
+    return entries.slice(0, topK).map((e) => ({
+      id: e.id, name: e.name, namespace: e.namespace, excerpt: (e.content || "").slice(0, maxChars), score: 0,
+    }));
+  }
+  return entries
+    .map((entry) => {
+      const hay = `${entry.name}\n${entry.content || ""}`.toLowerCase();
+      const score = terms.reduce((a, t) => a + (hay.includes(t) ? 1 : 0), 0);
+      return { entry, score };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map((r) => ({
+      id: r.entry.id,
+      name: r.entry.name,
+      namespace: r.entry.namespace,
+      excerpt: (r.entry.content || "").slice(0, maxChars),
+      score: r.score,
+    }));
+}
+
+async function retrieveKB(
+  query: string,
+  kb: KBEntry[],
+  topK: number,
+  maxCharsPerSnippet = 500,
+): Promise<RetrievedSnippet[]> {
+  if (!query.trim() || kb.length === 0) return [];
+
+  const indexedIds = new Set(kb.filter((e) => e.index_status === "ready").map((e) => e.id));
+  const unindexed = kb.filter((e) => !indexedIds.has(e.id));
+
+  // No indexed entries at all → pure lexical, same shape as before.
+  if (indexedIds.size === 0) {
+    return lexicalFallback(query, kb, topK, maxCharsPerSnippet);
+  }
+
+  let semanticHits: SearchHit[] = [];
+  try {
+    const queryVec = await embedText(query);
+    semanticHits = await searchChunks(queryVec, topK, [...indexedIds]);
+  } catch (err) {
+    // Embed failed (key bad, quota, network). Fall through to lexical for
+    // the whole KB so the rep still gets *something*.
+    console.warn("[live-agents] embed failed, falling back to lexical:", err);
+    return lexicalFallback(query, kb, topK, maxCharsPerSnippet);
+  }
+
+  const semantic: RetrievedSnippet[] = semanticHits.map((h) => ({
+    id: h.entryId,
+    name: h.entryName,
+    namespace: h.namespace,
+    excerpt: h.text.length > maxCharsPerSnippet ? h.text.slice(0, maxCharsPerSnippet) : h.text,
+    score: h.score,
+  }));
+
+  // Top up with lexical hits from un-indexed entries so newly-added KB isn't
+  // invisible while it's still indexing.
+  const remaining = topK - semantic.length;
+  if (remaining > 0 && unindexed.length > 0) {
+    const lex = lexicalFallback(query, unindexed, remaining, maxCharsPerSnippet);
+    return [...semantic, ...lex];
+  }
+  return semantic;
 }
 
 // ─── Sentiment ──────────────────────────────────────────────────────────────
@@ -215,15 +309,13 @@ export async function runCoachAgent(
   const window = liveWindow(session.transcript);
   if (!window.trim()) return [];
 
-  // Trim KB hard for live calls — top 6 entries × 240 chars. Council/email
-  // path can use the full KB; live coach just needs the fastest possible
-  // grounding hit.
-  const kbSnippets = kb.slice(0, 6).map((k) => ({
-    id: k.id,
-    name: k.name,
-    namespace: k.namespace,
-    excerpt: (k.content || "").slice(0, 240),
-  }));
+  // Two-layer KB grounding (Karpathy-style wiki map + RAG drill-down):
+  //   1. Wiki map = TLDRs + top concepts. Tiny, sent for the WHOLE KB.
+  //      Coach uses this to know what the KB CONTAINS.
+  //   2. Cosine retrieval = top chunks for actual quoting / detail.
+  // Total prompt budget is similar to before but coverage is much wider.
+  const wikiMap = computeWikiCoachMap(kb, 24);
+  const kbSnippets = await retrieveKB(window, kb, 4, 240);
 
   const pending = session.agenda.filter((a) => a.status === "pending" || a.status === "in_progress");
   const lastSentiment = session.sentiment_history[session.sentiment_history.length - 1];
@@ -232,7 +324,11 @@ export async function runCoachAgent(
 Pending agenda: ${JSON.stringify(pending.map((p) => p.title))}
 Last sentiment: ${lastSentiment ? JSON.stringify(lastSentiment) : "none"}
 
-Knowledge base (for grounding):
+KB wiki map (titles + tldrs — use to know what we have, not for quoting):
+${JSON.stringify(wikiMap.toc)}
+Top concepts: ${JSON.stringify(wikiMap.top_concepts)}
+
+KB excerpts most relevant to the current transcript window (use these to ground specific claims):
 ${JSON.stringify(kbSnippets)}
 
 Live transcript (latest chunk):
@@ -363,11 +459,11 @@ export async function runLiveCouncilValidator(
   const cached = getCachedVerdict(suggestion);
   if (cached) return cached;
 
-  const kbSnippets = kb.slice(0, 8).map((k) => ({
-    id: k.id,
-    name: k.name,
-    excerpt: (k.content || "").slice(0, 360),
-  }));
+  // Validator needs grounding for the *suggestion* — pull KB chunks that
+  // semantically match the suggestion's body, not just whatever the coach
+  // happened to cite. This catches over-promises that aren't supported.
+  const validatorQuery = `${suggestion.title}\n${suggestion.body}`;
+  const kbSnippets = await retrieveKB(validatorQuery, kb, 8, 360);
 
   const user = `Prospect: ${session.input.company_name} (${session.input.persona_role})
 
@@ -463,47 +559,26 @@ export async function runLiveKbAsk(
   const q = question.trim();
   if (!q) return { answer: "Empty question." };
 
-  // Cheap lexical prefilter so we don't blow the prompt on large KBs.
-  const terms = q.toLowerCase().split(/\W+/).filter((t) => t.length > 3);
-  const ranked = kb
-    .map((entry) => {
-      const hay = `${entry.name}\n${entry.content}`.toLowerCase();
-      const score = terms.reduce((a, t) => a + (hay.includes(t) ? 1 : 0), 0);
-      return { entry, score };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6)
-    .map((r) => r.entry);
-
-  const kbJson = ranked.map((k) => ({
-    id: k.id,
-    name: k.name,
-    namespace: k.namespace,
-    excerpt: (k.content || "").slice(0, 500),
-  }));
+  // Semantic top-K with lexical fallback for un-indexed entries. Replaces
+  // the old keyword prefilter, which missed paraphrases (e.g. "how much for
+  // big customers?" never matched a chunk titled "enterprise pricing").
+  const kbJson = await retrieveKB(q, kb, 6, 500);
 
   const user = `Question: ${q}\n\nKB:\n${JSON.stringify(kbJson)}\n\nJSON only.`;
 
+  // Mid-call latency budget is tight — the rep asked while the prospect is
+  // talking. Use the fast live-tier model (haiku/flash-lite) and skip the
+  // validator pass: the answer prompt already enforces "quote KB verbatim,
+  // never invent," which is enough for a quick-look in-call answer. The
+  // earlier 2-call (answer + council) flow took ~6-10s and was unusable
+  // live. `session` is intentionally unused now but kept in the signature
+  // for callers that may re-add validation later.
+  void session;
   let raw = "";
-  try { raw = await callLLM(KB_ASK_SYSTEM, user, 500); } catch (err) {
+  try { raw = await callLiveLLM(KB_ASK_SYSTEM, user, 350); } catch (err) {
     return { answer: `Error: ${String(err)}` };
   }
   const parsed = safeJson<{ answer: string; sources?: { kb_entry_id: string; quote: string }[] }>(raw);
   if (!parsed?.answer) return { answer: "No answer available." };
-
-  // Validator gate — same council rule as coach suggestions.
-  const pseudoSuggestion: CoachSuggestion = {
-    id: `kb-${Date.now()}`,
-    kind: "kb_answer",
-    title: q,
-    body: parsed.answer,
-    urgency: "medium",
-    created_at: Date.now(),
-    sources: parsed.sources,
-  };
-  const outcome = await runLiveCouncilValidator(pseudoSuggestion, session, ranked);
-  if (outcome.verdict === "reject" || !outcome.suggestion) {
-    return { answer: "Council rejected this answer (not grounded in KB).", rejected: true };
-  }
-  return { answer: outcome.suggestion.body, sources: outcome.suggestion.sources };
+  return { answer: parsed.answer, sources: parsed.sources };
 }

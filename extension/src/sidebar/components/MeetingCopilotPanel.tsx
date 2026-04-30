@@ -19,11 +19,16 @@ import {
   type StoredSessionSummary,
 } from "../../shared/utils/settings-storage";
 import { pushZohoNote, pushCustomTool } from "../../shared/utils/integrations";
+import { parsePastedInvite } from "../../shared/utils/meeting-parse";
 import { CopyButton } from "./CopyButton";
 import type { MeetingPostCallSummary } from "../../shared/types";
 
-// Fully manual. No Google Calendar. No Zoho. No OAuth prompts ever.
-// Anyone can open this panel and start a session by typing in the fields.
+// Three onboarding paths into a copilot session, in priority order:
+//   1. Connect Google Calendar — auto-fills from the matching invite.
+//   2. Paste meeting URL / invite text — LLM extracts company/agenda/notes.
+//   3. Fill the form manually — fallback when the paste yields nothing.
+// All three populate the same downstream state, so live agents don't care
+// which path the user took.
 
 const NEW_ITEM_TEMPLATE = (): AgendaItem => ({
   id: `agenda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -75,14 +80,20 @@ export function MeetingCopilotPanel() {
       if (m.type === "MC_TRANSCRIPT_APPEND") {
         appendTranscript(m.payload as TranscriptSegment);
       } else if (m.type === "MC_ASK_KB") {
-        const question = (m.payload as { question?: string })?.question || "";
+        const askPayload = m.payload as { question?: string; id?: string };
+        const question = askPayload?.question || "";
+        const askId = askPayload?.id;
         const currentSession = useMeetingCopilotStore.getState().session;
         if (!currentSession) return;
         void runLiveKbAsk(question, currentSession, kbEntries).then((ans) => {
-          chrome.runtime.sendMessage({ type: "MC_KB_ANSWER", payload: ans }).catch(() => { /* noop */ });
+          // Echo the question id back so the transponder can match this
+          // answer to the right thread entry — necessary because the rep
+          // may have already cancelled it by asking another question.
+          const out = { ...ans, id: askId };
+          chrome.runtime.sendMessage({ type: "MC_KB_ANSWER", payload: out }).catch(() => { /* noop */ });
           const tabId = currentSession.tab_id;
           if (tabId) {
-            chrome.tabs.sendMessage(tabId, { type: "MC_KB_ANSWER", payload: ans }).catch(() => { /* noop */ });
+            chrome.tabs.sendMessage(tabId, { type: "MC_KB_ANSWER", payload: out }).catch(() => { /* noop */ });
           }
         });
       }
@@ -93,9 +104,77 @@ export function MeetingCopilotPanel() {
 
   const [companyName, setCompanyName] = useState(company?.name || "");
   const [personaRole, setPersonaRole] = useState("");
+  const [meetingUrl, setMeetingUrl] = useState("");
   const [meetingTitle, setMeetingTitle] = useState("");
   const [meetingNotes, setMeetingNotes] = useState("");
   const [agenda, setAgenda] = useState<AgendaItem[]>([]);
+
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteStatus, setPasteStatus] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [showManualFields, setShowManualFields] = useState(true);
+
+  const [urlBusy, setUrlBusy] = useState(false);
+  const [urlStatus, setUrlStatus] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function handleLookupUrl() {
+    const url = meetingUrl.trim();
+    if (!url) return;
+    setUrlBusy(true);
+    setUrlStatus(null);
+    try {
+      const parsed = await parsePastedInvite(
+        `This is a meeting link the rep is about to join. From the URL alone, infer whatever you can about the meeting — calendar event ID, Zoom/Meet platform, anything in the slug. Do not invent company or agenda details that aren't visible in the URL. URL: ${url}`,
+      );
+      const filled: string[] = [];
+      if (parsed.company_name && !companyName.trim()) { setCompanyName(parsed.company_name); filled.push("company"); }
+      if (parsed.persona_role && !personaRole.trim()) { setPersonaRole(parsed.persona_role); filled.push("persona"); }
+      if (parsed.meeting_title && !meetingTitle.trim()) { setMeetingTitle(parsed.meeting_title); filled.push("title"); }
+      if (parsed.meeting_notes && !meetingNotes.trim()) { setMeetingNotes(parsed.meeting_notes); filled.push("notes"); }
+      if (filled.length === 0) {
+        setUrlStatus({
+          ok: false,
+          detail: "Bare meeting URLs usually don't carry context. Fill the fields below — the URL is still saved as call context.",
+        });
+      } else {
+        setUrlStatus({ ok: true, detail: `Filled ${filled.join(", ")} from the URL. Edit anything you want, then start.` });
+      }
+    } catch (err) {
+      setUrlStatus({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setUrlBusy(false);
+    }
+  }
+
+  async function handleParsePaste() {
+    const text = pasteText.trim();
+    if (!text) return;
+    setPasteBusy(true);
+    setPasteStatus(null);
+    try {
+      const parsed = await parsePastedInvite(text);
+      const filled: string[] = [];
+      if (parsed.company_name) { setCompanyName(parsed.company_name); filled.push("company"); }
+      if (parsed.persona_role) { setPersonaRole(parsed.persona_role); filled.push("persona"); }
+      if (parsed.meeting_title) { setMeetingTitle(parsed.meeting_title); filled.push("title"); }
+      if (parsed.meeting_notes) { setMeetingNotes(parsed.meeting_notes); filled.push("notes"); }
+      if (parsed.agenda?.length) { setAgenda(parsed.agenda); filled.push(`${parsed.agenda.length} agenda item${parsed.agenda.length === 1 ? "" : "s"}`); }
+      if (filled.length === 0) {
+        setPasteStatus({
+          ok: false,
+          detail: "Couldn't extract anything from that. If it's just a Meet/Calendar URL, paste the invite body too — or fill the fields manually.",
+        });
+        setShowManualFields(true);
+      } else {
+        setPasteStatus({ ok: true, detail: `Filled ${filled.join(", ")}. Review below and start.` });
+        setShowManualFields(true);
+      }
+    } catch (err) {
+      setPasteStatus({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setPasteBusy(false);
+    }
+  }
 
   function updateAgendaItem(id: string, patch: Partial<AgendaItem>) {
     setAgenda((items) => items.map((it) => (it.id === id ? { ...it, ...patch } : it)));
@@ -108,12 +187,16 @@ export function MeetingCopilotPanel() {
   }
 
   async function startSession() {
+    const url = meetingUrl.trim();
+    const noteParts = [meetingNotes.trim(), url ? `Meeting link: ${url}` : ""].filter(Boolean);
+    const mergedNotes = noteParts.join("\n\n");
+
     const input: MeetingSessionInput = {
       company_name: companyName,
       persona_role: personaRole,
       agenda: agenda.filter((a) => a.title.trim().length > 0),
       meeting_title: meetingTitle || undefined,
-      meeting_notes: meetingNotes || undefined,
+      meeting_notes: mergedNotes || undefined,
     };
 
     const tabs = await chrome.tabs.query({ url: "https://meet.google.com/*" });
@@ -316,6 +399,46 @@ export function MeetingCopilotPanel() {
         </div>
       </div>
 
+      <div style={section}>
+        <div style={sectionHead}>
+          <span>Paste meeting URL or invite</span>
+          <span style={optional}>fastest path</span>
+        </div>
+        <div style={muted}>
+          Paste a calendar event URL, .ics body, or the raw invite text — we'll auto-fill prospect, title, notes, and agenda.
+          A bare Meet URL alone won't have enough context, so include the invite body if you can.
+        </div>
+        <textarea
+          style={{ ...input, minHeight: 80, resize: "vertical" }}
+          placeholder="https://calendar.google.com/event?eid=… or paste the invite body here"
+          value={pasteText}
+          onChange={(e) => setPasteText(e.target.value)}
+        />
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            style={{ ...ghostBtn, opacity: pasteText.trim() && !pasteBusy ? 1 : 0.4 }}
+            disabled={!pasteText.trim() || pasteBusy}
+            onClick={handleParsePaste}
+          >
+            {pasteBusy ? "Parsing…" : "Parse & fill fields"}
+          </button>
+          <button style={ghostBtn} onClick={() => setShowManualFields((v) => !v)}>
+            {showManualFields ? "Hide manual fields" : "Fill manually"}
+          </button>
+        </div>
+        {pasteStatus && (
+          <div
+            style={{
+              ...muted,
+              fontSize: 11,
+              color: pasteStatus.ok ? "#7FB236" : "#E05A4B",
+            }}
+          >
+            {pasteStatus.detail}
+          </div>
+        )}
+      </div>
+
       {!isLive && !summary && history.length > 0 && (
         <div style={section}>
           <div style={sectionHead}><span>Recent calls</span></div>
@@ -344,48 +467,73 @@ export function MeetingCopilotPanel() {
         </div>
       )}
 
-      <div style={section}>
-        <div style={sectionHead}><span>Prospect</span></div>
-        <input style={input} placeholder="Company name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
-        <input style={{ ...input, marginTop: 6 }} placeholder="Persona role (e.g. CFO, VP Eng)" value={personaRole} onChange={(e) => setPersonaRole(e.target.value)} />
-      </div>
-
-      <div style={section}>
-        <div style={sectionHead}><span>Meeting context</span><span style={optional}>optional</span></div>
-        <input
-          style={input}
-          placeholder="Meeting title (e.g. Q2 roadmap review with Acme)"
-          value={meetingTitle}
-          onChange={(e) => setMeetingTitle(e.target.value)}
-        />
-        <textarea
-          style={{ ...input, marginTop: 6, minHeight: 72, resize: "vertical" }}
-          placeholder="Any context you want the copilot to know — last call outcome, objections raised, key stakeholders, CRM notes you want to paste in."
-          value={meetingNotes}
-          onChange={(e) => setMeetingNotes(e.target.value)}
-        />
-      </div>
-
-      <div style={section}>
-        <div style={sectionHead}>
-          <span>Agenda</span>
-          <button style={ghostBtn} onClick={addAgendaItem}>+ Add</button>
-        </div>
-        {!agenda.length && <div style={muted}>Add the 3–5 things you must cover. The agenda tracker will mark each one as you go.</div>}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {agenda.map((item) => (
-            <div key={item.id} style={agendaRow}>
-              <input style={{ ...input, flex: 1 }} placeholder="Agenda item" value={item.title} onChange={(e) => updateAgendaItem(item.id, { title: e.target.value })} />
-              <select style={select} value={item.priority} onChange={(e) => updateAgendaItem(item.id, { priority: e.target.value as AgendaItem["priority"] })}>
-                <option value="must_cover">Must</option>
-                <option value="should_cover">Should</option>
-                <option value="nice_to_have">Nice</option>
-              </select>
-              <button style={xBtn} onClick={() => removeAgendaItem(item.id)}>×</button>
+      {showManualFields && (
+        <>
+          <div style={section}>
+            <div style={sectionHead}><span>Prospect</span></div>
+            <input style={input} placeholder="Company name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
+            <input style={{ ...input, marginTop: 6 }} placeholder="Persona role (e.g. CFO, VP Eng)" value={personaRole} onChange={(e) => setPersonaRole(e.target.value)} />
+            <div style={{ display: "flex", gap: 6, alignItems: "stretch", marginTop: 6 }}>
+              <input
+                style={{ ...input, flex: 1 }}
+                placeholder="Meeting link (Meet / Zoom / calendar event URL)"
+                value={meetingUrl}
+                onChange={(e) => setMeetingUrl(e.target.value)}
+              />
+              <button
+                style={{ ...ghostBtn, opacity: meetingUrl.trim() && !urlBusy ? 1 : 0.4 }}
+                disabled={!meetingUrl.trim() || urlBusy}
+                onClick={handleLookupUrl}
+                title="Try to infer details from this meeting link"
+              >
+                {urlBusy ? "…" : "Look up"}
+              </button>
             </div>
-          ))}
-        </div>
-      </div>
+            {urlStatus && (
+              <div style={{ ...muted, fontSize: 11, color: urlStatus.ok ? "#7FB236" : "#E05A4B" }}>
+                {urlStatus.detail}
+              </div>
+            )}
+          </div>
+
+          <div style={section}>
+            <div style={sectionHead}><span>Meeting context</span><span style={optional}>optional</span></div>
+            <input
+              style={input}
+              placeholder="Meeting title (e.g. Q2 roadmap review with Acme)"
+              value={meetingTitle}
+              onChange={(e) => setMeetingTitle(e.target.value)}
+            />
+            <textarea
+              style={{ ...input, marginTop: 6, minHeight: 72, resize: "vertical" }}
+              placeholder="Any context you want the copilot to know — last call outcome, objections raised, key stakeholders, CRM notes you want to paste in."
+              value={meetingNotes}
+              onChange={(e) => setMeetingNotes(e.target.value)}
+            />
+          </div>
+
+          <div style={section}>
+            <div style={sectionHead}>
+              <span>Agenda</span>
+              <button style={ghostBtn} onClick={addAgendaItem}>+ Add</button>
+            </div>
+            {!agenda.length && <div style={muted}>Add the 3–5 things you must cover. The agenda tracker will mark each one as you go.</div>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {agenda.map((item) => (
+                <div key={item.id} style={agendaRow}>
+                  <input style={{ ...input, flex: 1 }} placeholder="Agenda item" value={item.title} onChange={(e) => updateAgendaItem(item.id, { title: e.target.value })} />
+                  <select style={select} value={item.priority} onChange={(e) => updateAgendaItem(item.id, { priority: e.target.value as AgendaItem["priority"] })}>
+                    <option value="must_cover">Must</option>
+                    <option value="should_cover">Should</option>
+                    <option value="nice_to_have">Nice</option>
+                  </select>
+                  <button style={xBtn} onClick={() => removeAgendaItem(item.id)}>×</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <div style={section}>
         {!isLive ? (

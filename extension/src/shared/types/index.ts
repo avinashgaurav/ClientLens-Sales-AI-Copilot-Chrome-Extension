@@ -201,6 +201,85 @@ export type KBSourceType = "text" | "file" | "url" | "git";
 
 export type KBStatus = "ready" | "pending_parse" | "error";
 
+// Lifecycle of the embedding/chunk pipeline for a single entry.
+// Independent of the parse status above — an entry can be parse-ready but
+// still un-indexed (e.g. on legacy installs before vector retrieval shipped).
+export type KBIndexStatus = "pending" | "indexing" | "ready" | "failed";
+
+// One semantic chunk + its embedding. Stored in IndexedDB keyed by entry id,
+// not on the KBEntry itself, because chrome.storage.local has a 10MB cap.
+export interface KBChunk {
+  text: string;
+  embedding: number[]; // Gemini text-embedding-004 → 768 floats
+}
+
+// ─── Wiki layer (Karpathy-style ingest-time knowledge compilation) ───────────
+//
+// Every KB entry has an optional WikiPage — a structured, LLM-generated view
+// of the source. Contradictions across entries are detected at ingest, not
+// at query time. The live coach reads TLDRs + concepts (cheap map of the KB)
+// and only drills to chunks when a question warrants it.
+
+export type WikiPageType =
+  | "concept"
+  | "case_study"
+  | "product_overview"
+  | "battlecard"
+  | "pricing"
+  | "process"
+  | "other";
+
+export type WikiConfidence = "high" | "medium" | "low";
+
+export interface WikiClaim {
+  text: string;
+  // Loose taxonomy — used to weight contradiction checks (metric vs metric is
+  // worth flagging; positioning vs positioning often isn't).
+  kind: "metric" | "positioning" | "customer" | "capability" | "pricing" | "other";
+}
+
+export interface WikiContradiction {
+  with_entry_id: string;       // the OTHER page this conflicts with
+  with_entry_name?: string;    // captured at detection time so renames don't break the link
+  my_claim: string;
+  their_claim: string;
+  note: string;                // 1-sentence explanation
+}
+
+export interface WikiPage {
+  type: WikiPageType;
+  title: string;
+  tldr: string;                // ≤ 200 chars, standalone
+  body_markdown: string;       // structured restatement of the source
+  concepts: string[];          // specific noun phrases (companies, features, metrics)
+  tags: string[];              // broader categories
+  claims: WikiClaim[];
+  data_gaps: string[];         // what's referenced but not explained
+  confidence: WikiConfidence;
+  contradictions: WikiContradiction[];
+  generated_at: string;        // ISO
+  generator_model?: string;
+}
+
+export type WikiBuildStatus = "pending" | "building" | "ready" | "failed";
+
+// Computed view — derived from the full entry list, never persisted on its
+// own. Built by computeWikiIndex().
+export interface WikiIndex {
+  total_pages: number;
+  ready_pages: number;
+  concepts: { name: string; entry_ids: string[] }[];
+  tags: { name: string; count: number }[];
+  contradictions: {
+    entry_id: string;
+    entry_name: string;
+    with_entry_id: string;
+    with_entry_name?: string;
+    note: string;
+  }[];
+  orphan_entry_ids: string[];   // entries whose concepts don't intersect any other page
+}
+
 export interface KBEntry {
   id: string;
   name: string;
@@ -215,6 +294,13 @@ export interface KBEntry {
   uploaded_by: string;
   uploaded_by_role: UserRole;
   uploaded_at: string;
+  index_status?: KBIndexStatus;
+  index_error?: string;
+  index_chunk_count?: number;
+  indexed_at?: string;
+  wiki_status?: WikiBuildStatus;
+  wiki_error?: string;
+  wiki_page?: WikiPage;
 }
 
 // ─── Personalization Form ─────────────────────────────────────────────────────
