@@ -47,7 +47,7 @@ export function OnboardingChecklist({ kbCount, onOpenSettings }: Props) {
   }
 
   return (
-    <div className="border border-brand-orange/40 bg-brand-orange/5 p-3 relative">
+    <div className="border border-orange/40 bg-orange/5 p-3 relative">
       <button
         onClick={dismiss}
         aria-label="Dismiss"
@@ -56,7 +56,7 @@ export function OnboardingChecklist({ kbCount, onOpenSettings }: Props) {
         <X size={12} />
       </button>
       <div className="flex items-center gap-1.5 mb-2">
-        <Sparkles size={12} className="text-brand-orange" />
+        <Sparkles size={12} className="text-orange" />
         <span className="text-[11px] font-semibold text-ink">Get set up</span>
         <span className="text-[10px] font-mono text-ink-4 ml-auto mr-4">
           {steps.length - remaining} / {steps.length}
@@ -66,7 +66,7 @@ export function OnboardingChecklist({ kbCount, onOpenSettings }: Props) {
         {steps.map((s) => (
           <li key={s.id} className="flex items-center gap-2 text-[11px]">
             {s.done ? (
-              <CheckCircle2 size={12} className="text-brand-green shrink-0" />
+              <CheckCircle2 size={12} className="text-green shrink-0" />
             ) : (
               <Circle size={12} className="text-ink-4 shrink-0" />
             )}
@@ -74,7 +74,7 @@ export function OnboardingChecklist({ kbCount, onOpenSettings }: Props) {
             {!s.done && s.action && (
               <button
                 onClick={s.action}
-                className="ml-auto text-[10px] font-mono uppercase tracking-[0.14em] text-brand-orange hover:underline"
+                className="ml-auto text-[10px] font-mono uppercase tracking-[0.14em] text-orange hover:underline"
               >
                 Open
               </button>

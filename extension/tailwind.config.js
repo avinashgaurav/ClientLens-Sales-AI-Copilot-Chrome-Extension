@@ -1,14 +1,14 @@
 /** @type {import('tailwindcss').Config}
  *
- * Design-system bridge.
+ * Project Wingman design-system bridge.
  *
  * Rather than sweep every V1 component's Tailwind classes, we remap the
  * scales the existing code already uses so the whole app inherits the
  * brand automatically:
  *
- *   slate-*   → ink/line ladder (cream text on dark surfaces)
- *   violet-*  → brand-orange  (primary accent / CTA)
- *   emerald-* → brand-green   (success, "live")
+ *   slate-*   → Project Wingman ink/line ladder (cream text on dark surfaces)
+ *   violet-*  → orange  (primary accent / CTA)
+ *   emerald-* → green   (success, "live")
  *   red-*     → err (#F87171)
  *   amber-*   → warn (#FBBF24)
  *
@@ -16,7 +16,7 @@
  *   - border-radius scale collapses to 0 (with a single pill exception)
  *   - font-family defaults to Space Grotesk / JetBrains Mono
  *
- * Brand classes are also exposed directly: bg-brand-orange, text-ink-2, etc.
+ * Brand classes are also exposed directly: bg-orange, text-ink-2, etc.
  */
 export default {
   content: ["./src/**/*.{ts,tsx}", "./sidebar.html", "./popup.html"],
@@ -47,12 +47,11 @@ export default {
         meta: "0.14em",
       },
       colors: {
-        // Brand-level aliases
-        "brand-blue": "#2A4494",
-        "brand-orange": "#F58549",
-        "brand-green": "#7FB236",
-        "brand-black": "#0A0A0A",
-        "brand-cream": "#F0EBDB",
+        // Brand-level aliases (top-level — used as `bg-orange`, `text-blue`, etc.)
+        blue: "#2A4494",
+        orange: "#F58549",
+        black: "#0A0A0A",
+        cream: "#F0EBDB",
         ink: {
           DEFAULT: "#F0EBDB",
           2: "#D4CDB5",
@@ -113,6 +112,7 @@ export default {
           700: "#5F871F",
         },
         green: {
+          DEFAULT: "#7FB236",
           400: "#7FB236",
           500: "#7FB236",
           600: "#7FB236",

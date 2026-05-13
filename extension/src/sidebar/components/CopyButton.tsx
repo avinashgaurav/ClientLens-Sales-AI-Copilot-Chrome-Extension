@@ -33,7 +33,7 @@ export function CopyButton({
   const base = "flex items-center gap-1 text-[11px] font-medium transition-colors";
   const skin =
     variant === "solid"
-      ? "bg-brand-orange text-brand-black hover:shadow-hover-orange"
+      ? "bg-orange text-black hover:shadow-hover-orange"
       : "border border-line text-ink-3 hover:text-ink hover:border-line-2 bg-surface-2";
 
   return (
@@ -45,7 +45,7 @@ export function CopyButton({
     >
       {copied ? (
         <>
-          <Check size={iconSize} className="text-brand-green" />
+          <Check size={iconSize} className="text-green" />
           <span>Copied</span>
         </>
       ) : (

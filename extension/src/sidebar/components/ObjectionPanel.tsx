@@ -107,7 +107,7 @@ export function ObjectionPanel() {
 
       <p className="text-[11px] text-slate-500">
         Paste the prospect's objection, or right-click any selected text on a page and pick
-        <span className="text-slate-300"> "ClientLens: Handle objection"</span>.
+        <span className="text-slate-300"> "Project Wingman: Handle objection"</span>.
       </p>
 
       {objectionInput?.source_url && (

@@ -52,6 +52,10 @@ PERMISSIONS: dict[str, list[Role]] = {
 
     # Admin panel
     "admin:access": [Role.ADMIN, Role.DESIGNER, Role.PMM],
+
+    # CRM integration — minting Zoho OAuth tokens with full CRM scope.
+    # Restricted to roles that push notes to CRM. Closes #34.
+    "crm:connect": [Role.ADMIN, Role.SALES_REP],
 }
 
 

@@ -123,7 +123,11 @@ async function writeSlides(
           ?.map((t) => t.textRun?.content ?? "")
           .join("") ?? "";
       snapshot.push({ slideId: slide.objectId, shapeId: titleShape.objectId, text: existing });
-      requests.push({ deleteText: { objectId: titleShape.objectId, textRange: { type: "ALL" } } });
+      // Slides API rejects deleteText on empty ranges (startIndex == endIndex).
+      // Only delete when the placeholder has visible content.
+      if (existing.replace(/\s/g, "").length > 0) {
+        requests.push({ deleteText: { objectId: titleShape.objectId, textRange: { type: "ALL" } } });
+      }
       requests.push({ insertText: { objectId: titleShape.objectId, text: title, insertionIndex: 0 } });
     }
 
@@ -133,7 +137,9 @@ async function writeSlides(
           ?.map((t) => t.textRun?.content ?? "")
           .join("") ?? "";
       snapshot.push({ slideId: slide.objectId, shapeId: bodyShape.objectId, text: existing });
-      requests.push({ deleteText: { objectId: bodyShape.objectId, textRange: { type: "ALL" } } });
+      if (existing.replace(/\s/g, "").length > 0) {
+        requests.push({ deleteText: { objectId: bodyShape.objectId, textRange: { type: "ALL" } } });
+      }
       requests.push({ insertText: { objectId: bodyShape.objectId, text: body, insertionIndex: 0 } });
     }
   }
@@ -142,7 +148,7 @@ async function writeSlides(
   if (genCount > existingCount) {
     for (let i = existingCount; i < genCount; i++) {
       const slide = generated[i];
-      const slideId = `zn_${Date.now()}_${i}`;
+      const slideId = `zn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${i}`;
       const titleId = `${slideId}_title`;
       const bodyId = `${slideId}_body`;
       const { title, body } = stringifySlide(slide);

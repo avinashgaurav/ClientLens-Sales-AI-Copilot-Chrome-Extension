@@ -27,6 +27,7 @@ import {
   type IntegrationId,
   type IntegrationConfig,
 } from "../../shared/utils/settings-storage";
+import { clearAllKB } from "../../shared/utils/kb-storage";
 import {
   testZoho,
   testGoogleMeet,
@@ -67,7 +68,7 @@ const INTEGRATIONS: IntegrationDef[] = [
     name: "Zoho CRM",
     tagline: "Sync accounts, contacts and deal notes.",
     icon: <Database size={14} />,
-    accent: "brand-orange",
+    accent: "orange",
     docsUrl: "https://api-console.zoho.com",
     docsLabel: "Zoho API console",
     pullLabel: "Pull accounts, contacts, open deals",
@@ -84,7 +85,7 @@ const INTEGRATIONS: IntegrationDef[] = [
     name: "Google Meet",
     tagline: "Attach the on-screen transponder to live calls.",
     icon: <Video size={14} />,
-    accent: "brand-blue",
+    accent: "blue",
     docsUrl: "https://console.cloud.google.com/apis/credentials",
     docsLabel: "Google Cloud credentials",
     pullLabel: "Pull upcoming meeting titles and invite metadata",
@@ -100,7 +101,7 @@ const INTEGRATIONS: IntegrationDef[] = [
     name: "Zoom",
     tagline: "Use Zoom meeting transcripts as the live stream.",
     icon: <Video size={14} />,
-    accent: "brand-green",
+    accent: "green",
     docsUrl: "https://marketplace.zoom.us",
     docsLabel: "Zoom Marketplace",
     pullLabel: "Pull scheduled meetings and recorded transcripts",
@@ -116,7 +117,7 @@ const INTEGRATIONS: IntegrationDef[] = [
     name: "Custom tool",
     tagline: "Any CRM, data warehouse, or internal service.",
     icon: <Wrench size={14} />,
-    accent: "brand-cream",
+    accent: "cream",
     pullLabel: "Pull data from your system before each call",
     pushLabel: "Push call outcomes to your system after each call",
     fields: [
@@ -150,6 +151,10 @@ export function SettingsPanel({ open, onClose }: Props) {
 
   function onWipe() {
     const { removed } = clearAllSessionData();
+    // Also clear IndexedDB vector chunks so the KB is fully wiped, not just
+    // the chrome.storage.local metadata. clearAllKB is fire-and-forget here
+    // since the session-data wipe already gave the user feedback.
+    void clearAllKB().catch(() => { /* IndexedDB may not be available */ });
     setWipeState("done");
     setWipeNote(
       removed.length
@@ -245,7 +250,7 @@ export function SettingsPanel({ open, onClose }: Props) {
         <div className="flex-1 overflow-y-auto">
           <div className="px-4 pt-4 pb-2 flex items-center gap-3">
             <div className="flex items-center gap-2 text-[11px] text-ink-3">
-              <Plug size={12} className="text-brand-orange" />
+              <Plug size={12} className="text-orange" />
               <span className="font-mono uppercase tracking-[0.14em]">
                 {integrationsReady} of {INTEGRATIONS.length} connected
               </span>
@@ -342,7 +347,7 @@ export function SettingsPanel({ open, onClose }: Props) {
                 </div>
               </div>
               {wipeState === "done" ? (
-                <div className="text-[11px] text-brand-green flex items-center gap-1.5">
+                <div className="text-[11px] text-green flex items-center gap-1.5">
                   <Check size={11} /> {wipeNote}
                 </div>
               ) : wipeState === "confirm" ? (
@@ -385,7 +390,7 @@ export function SettingsPanel({ open, onClose }: Props) {
         <div className="px-4 py-3 border-t border-line flex items-center justify-between gap-3 bg-surface-1">
           <div className="text-[11px] text-ink-4">
             {saved ? (
-              <span className="flex items-center gap-1 text-brand-green">
+              <span className="flex items-center gap-1 text-green">
                 <Check size={12} /> Saved
               </span>
             ) : (
@@ -401,7 +406,7 @@ export function SettingsPanel({ open, onClose }: Props) {
             </button>
             <button
               onClick={onSave}
-              className="px-4 py-1.5 text-xs font-semibold bg-brand-orange text-brand-black hover:shadow-hover-orange transition-all"
+              className="px-4 py-1.5 text-xs font-semibold bg-orange text-black hover:shadow-hover-orange transition-all"
             >
               Save
             </button>
@@ -457,7 +462,7 @@ function IntegrationCard({
   return (
     <div
       className={`border bg-surface-2 transition-colors ${
-        connected ? "border-brand-green/40" : "border-line"
+        connected ? "border-green/40" : "border-line"
       }`}
     >
       <button
@@ -474,7 +479,7 @@ function IntegrationCard({
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-ink truncate">{def.name}</span>
             {connected ? (
-              <span className="text-[9px] font-mono uppercase tracking-[0.14em] text-brand-green border border-brand-green/40 px-1 py-px">
+              <span className="text-[9px] font-mono uppercase tracking-[0.14em] text-green border border-green/40 px-1 py-px">
                 connected
               </span>
             ) : (
@@ -550,7 +555,7 @@ function IntegrationCard({
             <div
               className={`flex items-start gap-1.5 text-[11px] px-2 py-1.5 border ${
                 testResult.ok
-                  ? "border-brand-green/40 bg-brand-green/5 text-brand-green"
+                  ? "border-green/40 bg-green/5 text-green"
                   : "border-red-500/40 bg-red-500/5 text-red-300"
               }`}
             >
@@ -569,7 +574,7 @@ function IntegrationCard({
                 href={def.docsUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-1 text-[11px] text-ink-3 hover:text-brand-orange"
+                className="flex items-center gap-1 text-[11px] text-ink-3 hover:text-orange"
               >
                 {def.docsLabel || "Get credentials"} <ExternalLink size={10} />
               </a>
@@ -602,7 +607,7 @@ function IntegrationCard({
                 <button
                   type="button"
                   onClick={onConnect}
-                  className="px-3 py-1.5 text-[11px] font-semibold bg-brand-orange text-brand-black hover:shadow-hover-orange transition-all"
+                  className="px-3 py-1.5 text-[11px] font-semibold bg-orange text-black hover:shadow-hover-orange transition-all"
                 >
                   Connect
                 </button>
@@ -634,16 +639,16 @@ function DirectionToggle({
       onClick={onToggle}
       className={`text-left p-2 border transition-colors ${
         active
-          ? "border-brand-green/50 bg-brand-green/5"
+          ? "border-green/50 bg-green/5"
           : "border-line bg-surface-1 hover:border-line-2"
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <span className={active ? "text-brand-green" : "text-ink-3"}>{icon}</span>
+        <span className={active ? "text-green" : "text-ink-3"}>{icon}</span>
         <span className="text-[11px] font-semibold text-ink">{label}</span>
         <span
           className={`ml-auto w-6 h-3 flex items-center ${
-            active ? "bg-brand-green/60 justify-end" : "bg-surface-3 justify-start"
+            active ? "bg-green/60 justify-end" : "bg-surface-3 justify-start"
           }`}
         >
           <span className="w-3 h-3 bg-ink" />
@@ -661,11 +666,18 @@ function ProviderPicker({
   settings: UserSettings;
   onPick: (p: UserSettings["provider"]) => void;
 }) {
+  // Providers proxied through the backend — no client-side API key needed.
+  const PROXIED = new Set(["anthropic", "gemini", "groq", "openrouter"]);
+
   const providers: { id: UserSettings["provider"]; label: string }[] = [
+    { id: "openrouter", label: "OpenRouter" },
     { id: "gemini", label: "Gemini" },
     { id: "anthropic", label: "Claude" },
+    { id: "groq", label: "Groq" },
+    { id: "ollama", label: "Ollama" },
     { id: "custom", label: settings.customLabel || "Custom" },
   ];
+  const isProxied = PROXIED.has(settings.provider);
   return (
     <div>
       <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-ink-4 mb-1.5">
@@ -680,7 +692,7 @@ function ProviderPicker({
               onClick={() => onPick(p.id)}
               className={`text-xs font-medium py-1.5 px-2 transition-colors truncate ${
                 active
-                  ? "bg-brand-orange text-brand-black"
+                  ? "bg-orange text-black"
                   : "text-ink-3 hover:text-ink hover:bg-surface-3"
               }`}
             >
@@ -689,6 +701,15 @@ function ProviderPicker({
           );
         })}
       </div>
+      {isProxied && (
+        <div className="mt-1.5 text-[10px] text-ink-4 leading-snug">
+          API key is managed by the backend — no client-side key needed.
+          Set <span className="font-mono">OPENROUTER_API_KEY</span> /
+          <span className="font-mono"> ANTHROPIC_API_KEY</span> /
+          <span className="font-mono"> GROQ_API_KEY</span> in{" "}
+          <span className="font-mono">backend/.env</span>.
+        </div>
+      )}
     </div>
   );
 }
@@ -714,7 +735,7 @@ function CustomProviderCard({
             OpenAI-compatible
           </span>
           {ready && (
-            <span className="text-[9px] font-mono uppercase tracking-[0.14em] text-brand-green border border-brand-green/40 px-1 py-px">
+            <span className="text-[9px] font-mono uppercase tracking-[0.14em] text-green border border-green/40 px-1 py-px">
               ready
             </span>
           )}
@@ -731,7 +752,7 @@ function CustomProviderCard({
           onChange={(e) => onChange("customLabel", e.target.value)}
           placeholder="Display name (e.g. OpenAI, OpenRouter)"
           spellCheck={false}
-          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
+          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-orange"
         />
         <input
           type="text"
@@ -740,7 +761,7 @@ function CustomProviderCard({
           placeholder="Endpoint URL (e.g. https://api.openai.com/v1)"
           spellCheck={false}
           autoComplete="off"
-          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
+          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-orange"
         />
         <input
           type="text"
@@ -748,7 +769,7 @@ function CustomProviderCard({
           onChange={(e) => onChange("customModel", e.target.value)}
           placeholder="Model name (e.g. gpt-4o-mini)"
           spellCheck={false}
-          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
+          className="w-full border border-line bg-surface-1 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-orange"
         />
         <div className="flex items-stretch border border-line bg-surface-1">
           <input
@@ -800,7 +821,7 @@ function CompactKey({
             href={link}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1 text-[10px] text-ink-3 hover:text-brand-orange"
+            className="flex items-center gap-1 text-[10px] text-ink-3 hover:text-orange"
           >
             Get key <ExternalLink size={9} />
           </a>

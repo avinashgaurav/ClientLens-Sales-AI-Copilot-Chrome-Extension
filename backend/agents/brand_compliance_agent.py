@@ -14,7 +14,7 @@ from models import GenerationRequest, AgentResult
 from db.supabase_client import get_design_system, get_brand_voice
 from config import settings
 
-SYSTEM_PROMPT = """You are a Brand Compliance Agent for ClientLens's sales team.
+SYSTEM_PROMPT = """You are a Brand Compliance Agent for Project Wingman's sales team.
 
 Your job is to:
 1. Review the proposed content against the active Design System and Brand Voice guidelines

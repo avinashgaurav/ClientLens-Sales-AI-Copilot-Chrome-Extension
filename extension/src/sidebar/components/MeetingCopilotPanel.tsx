@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMeetingCopilotStore } from "../stores/meeting-copilot-store";
 import { useAppStore } from "../stores/app-store";
 import { listKB } from "../../shared/utils/kb-storage";
@@ -9,7 +9,7 @@ import type {
   TranscriptSegment,
 } from "../../shared/types";
 import { generatePostCallSummary } from "../../meeting-copilot/agents/post-call-summary";
-import { runLiveKbAsk } from "../../meeting-copilot/agents/live-agents";
+import { clearValidatorCache, runLiveKbAsk } from "../../meeting-copilot/agents/live-agents";
 import { startLiveOrchestrator, stopLiveOrchestrator } from "../../meeting-copilot/agents/live-orchestrator";
 import { connectCalendarInteractive } from "../../meeting-copilot/integrations/google-calendar";
 import {
@@ -48,6 +48,9 @@ export function MeetingCopilotPanel() {
   const summary = useMeetingCopilotStore((s) => s.lastSummary);
 
   const [kbEntries, setKbEntries] = useState<KBEntry[]>([]);
+  // AbortController for the current in-flight KB ask — aborted when a new
+  // question arrives so zombie fetches don't queue up on the backend.
+  const currentKbAskController = useRef<AbortController | null>(null);
   const company = useAppStore((s) => s.company);
   const [history, setHistory] = useState<StoredSessionSummary[]>([]);
   const [pushStatus, setPushStatus] = useState<{ ok: boolean; detail: string } | null>(null);
@@ -70,7 +73,23 @@ export function MeetingCopilotPanel() {
     setCalendarBusy(false);
   }
 
-  useEffect(() => { void listKB().then(setKbEntries).catch(() => setKbEntries([])); }, []);
+  useEffect(() => {
+    void listKB().then(setKbEntries).catch(() => setKbEntries([]));
+    // Refresh KB whenever chrome.storage.local changes so entries added
+    // mid-session (e.g., from another panel) are visible to live agents.
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area === "local" && "clientlens_kb" in changes) {
+        void listKB().then(setKbEntries).catch(() => setKbEntries([]));
+      }
+    };
+    try { chrome.storage?.onChanged?.addListener(onStorageChanged); } catch { /* non-extension env */ }
+    return () => {
+      try { chrome.storage?.onChanged?.removeListener(onStorageChanged); } catch { /* noop */ }
+    };
+  }, []);
   useEffect(() => { setHistory(listSessionHistory()); }, [summary]);
 
   useEffect(() => {
@@ -85,10 +104,13 @@ export function MeetingCopilotPanel() {
         const askId = askPayload?.id;
         const currentSession = useMeetingCopilotStore.getState().session;
         if (!currentSession) return;
-        void runLiveKbAsk(question, currentSession, kbEntries).then((ans) => {
-          // Echo the question id back so the transponder can match this
-          // answer to the right thread entry — necessary because the rep
-          // may have already cancelled it by asking another question.
+        // Abort any in-flight KB ask so we don't accumulate zombie fetches
+        // when the rep types a new question before the previous one resolves.
+        currentKbAskController.current?.abort();
+        currentKbAskController.current = new AbortController();
+        const signal = currentKbAskController.current.signal;
+        void runLiveKbAsk(question, currentSession, kbEntries, signal).then((ans) => {
+          if (signal.aborted) return; // stale — new question already in flight
           const out = { ...ans, id: askId };
           chrome.runtime.sendMessage({ type: "MC_KB_ANSWER", payload: out }).catch(() => { /* noop */ });
           const tabId = currentSession.tab_id;
@@ -116,6 +138,10 @@ export function MeetingCopilotPanel() {
 
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlStatus, setUrlStatus] = useState<{ ok: boolean; detail: string } | null>(null);
+  // Guard against double-click on "Start live copilot". The session state
+  // updates asynchronously (after chrome.tabs.query), so the button would
+  // accept a second click during that gap without this flag.
+  const [startBusy, setStartBusy] = useState(false);
 
   async function handleLookupUrl() {
     const url = meetingUrl.trim();
@@ -187,6 +213,8 @@ export function MeetingCopilotPanel() {
   }
 
   async function startSession() {
+    if (startBusy) return;  // guard: drop second click that lands before session state settles
+    setStartBusy(true);
     const url = meetingUrl.trim();
     const noteParts = [meetingNotes.trim(), url ? `Meeting link: ${url}` : ""].filter(Boolean);
     const mergedNotes = noteParts.join("\n\n");
@@ -199,31 +227,39 @@ export function MeetingCopilotPanel() {
       meeting_notes: mergedNotes || undefined,
     };
 
-    const tabs = await chrome.tabs.query({ url: "https://meet.google.com/*" });
-    const meetTab = tabs[0];
-    prepareSession(input, meetTab?.id);
-    setStatus("listening");
-    startLiveOrchestrator(() => kbEntries);
+    try {
+      clearValidatorCache(); // flush stale verdicts from last session
+      const tabs = await chrome.tabs.query({ url: "https://meet.google.com/*" });
+      const meetTab = tabs[0];
+      prepareSession(input, meetTab?.id);
+      setStatus("listening");
+      startLiveOrchestrator(() => kbEntries);
+      // Tell the service worker the sidebar orchestrator is active so it won't
+      // spin up a duplicate bg orchestrator if the transponder also fires MC_START_SESSION.
+      chrome.runtime.sendMessage({ type: "MC_SIDEBAR_ORCHESTRATOR_STARTED" }).catch(() => {});
 
-    await chrome.runtime.sendMessage({
-      type: "MC_START_SESSION",
-      session_id: useMeetingCopilotStore.getState().session?.id,
-      tabId: meetTab?.id,
-      payload: { input },
-    });
-
-    if (!meetTab?.id) {
-      setTransponderStatus({
-        ok: false,
-        detail: "No Google Meet tab open. Open one and click Start again — copilot still runs in this panel.",
+      await chrome.runtime.sendMessage({
+        type: "MC_START_SESSION",
+        session_id: useMeetingCopilotStore.getState().session?.id,
+        tabId: meetTab?.id,
+        payload: { input },
       });
-      return;
+
+      if (!meetTab?.id) {
+        setTransponderStatus({
+          ok: false,
+          detail: "No Google Meet tab open. Open one and click Start again — copilot still runs in this panel.",
+        });
+        return;
+      }
+      await openTransponderOnTab(meetTab.id, {
+        status: "listening",
+        input,
+        agenda: input.agenda,
+      });
+    } finally {
+      setStartBusy(false);
     }
-    await openTransponderOnTab(meetTab.id, {
-      status: "listening",
-      input,
-      agenda: input.agenda,
-    });
   }
 
   async function openTransponderOnTab(tabId: number, payload: Record<string, unknown>) {
@@ -276,6 +312,7 @@ export function MeetingCopilotPanel() {
 
   async function stopSession() {
     stopLiveOrchestrator();
+    chrome.runtime.sendMessage({ type: "MC_SIDEBAR_ORCHESTRATOR_STOPPED" }).catch(() => {});
     const finalSession = useMeetingCopilotStore.getState().session;
     await chrome.runtime.sendMessage({ type: "MC_STOP_SESSION" }).catch(() => { /* noop */ });
     if (finalSession && finalSession.transcript.length > 0) {
@@ -320,7 +357,7 @@ export function MeetingCopilotPanel() {
       const s = getSettings();
       const zoho = s.integrations.zoho;
       const custom = s.integrations.customTool;
-      const noteTitle = `ClientLens call · ${companyName}`;
+      const noteTitle = `Project Wingman call · ${companyName}`;
       const noteContent = summaryToMarkdown(summary, companyName, personaRole);
       if (zoho.connected && zoho.pushEnabled && zoho.fields.parentModule && zoho.fields.parentId) {
         const res = await pushZohoNote(zoho, {
@@ -537,8 +574,12 @@ export function MeetingCopilotPanel() {
 
       <div style={section}>
         {!isLive ? (
-          <button style={{ ...primaryBtn, opacity: readyToStart ? 1 : 0.4 }} disabled={!readyToStart} onClick={startSession}>
-            Start live copilot
+          <button
+            style={{ ...primaryBtn, opacity: (readyToStart && !startBusy) ? 1 : 0.4 }}
+            disabled={!readyToStart || startBusy}
+            onClick={startSession}
+          >
+            {startBusy ? "Starting…" : "Start live copilot"}
           </button>
         ) : (
           <button style={primaryBtn} onClick={stopSession}>End session &amp; summarize</button>

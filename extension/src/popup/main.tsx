@@ -60,7 +60,7 @@ function Popup() {
               letterSpacing: "-0.02em",
             }}
           >
-            ClientLens
+            Project Wingman
           </span>
           <span
             style={{

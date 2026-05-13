@@ -1,17 +1,45 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
-import { cpSync, existsSync } from "fs";
+import { cpSync, existsSync, copyFileSync, readFileSync, writeFileSync } from "fs";
 
-function copyStaticAssets() {
+// Localhost host_permissions are kept OUT of the committed manifest (issue
+// #37: shipping them in a production extension grants any visited page the
+// ability to reach the user's local FastAPI / Ollama). They get injected
+// here at build time only when running `vite build --mode development`.
+const DEV_LOCALHOST_HOSTS = [
+  "http://localhost:8000/*",
+  "http://localhost:11434/*",
+];
+
+function copyStaticAssets(mode: string) {
   return {
     name: "copy-static-assets",
     closeBundle() {
       const root = resolve(__dirname);
       const out = resolve(__dirname, "dist");
-      cpSync(resolve(root, "manifest.json"), resolve(out, "manifest.json"));
+      const manifestPath = resolve(out, "manifest.json");
+      cpSync(resolve(root, "manifest.json"), manifestPath);
+
+      if (mode === "development") {
+        // Dev build: inject localhost host_permissions so unpacked extension
+        // can talk to localhost:8000 (backend) and localhost:11434 (Ollama).
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        const existing = new Set(manifest.host_permissions || []);
+        for (const h of DEV_LOCALHOST_HOSTS) existing.add(h);
+        manifest.host_permissions = Array.from(existing);
+        writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+      }
+
       if (existsSync(resolve(root, "icons"))) {
         cpSync(resolve(root, "icons"), resolve(out, "icons"), { recursive: true });
+      }
+      // AudioWorklet processor — must be served as a plain script at the
+      // extension root so chrome.runtime.getURL('audio-processor.js') resolves.
+      // Vite does not bundle it (AudioWorklet scripts can't have ESM imports).
+      const audioProc = resolve(root, "src/offscreen/audio-processor.js");
+      if (existsSync(audioProc)) {
+        copyFileSync(audioProc, resolve(out, "audio-processor.js"));
       }
     },
   };
@@ -45,7 +73,7 @@ function idempotentTransponder() {
 
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), copyStaticAssets(), idempotentTransponder()],
+  plugins: [react(), copyStaticAssets(mode), idempotentTransponder()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

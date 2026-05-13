@@ -13,7 +13,7 @@ import json
 from models import GenerationRequest, AgentResult
 from config import settings
 
-SYSTEM_PROMPT = """You are a Validation and Fact-Checking Agent for ClientLens's sales intelligence system.
+SYSTEM_PROMPT = """You are a Validation and Fact-Checking Agent for Project Wingman's sales intelligence system.
 
 Your job is the FINAL quality gate before content reaches a customer.
 

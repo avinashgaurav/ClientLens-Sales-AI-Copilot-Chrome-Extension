@@ -48,7 +48,7 @@ ICP_RULES = {
     },
 }
 
-SYSTEM_PROMPT = """You are an ICP Personalization Agent for ClientLens's sales intelligence system.
+SYSTEM_PROMPT = """You are an ICP Personalization Agent for Project Wingman's sales intelligence system.
 
 Your job is to restructure and rewrite content specifically for the target ICP role.
 
