@@ -37,10 +37,10 @@ export function Header() {
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-line bg-surface-1">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 bg-orange flex items-center justify-center">
-            <span className="text-[11px] font-bold text-black font-mono">CL</span>
+            <span className="text-[11px] font-bold text-black font-mono">PW</span>
           </div>
           <div className="flex flex-col leading-none">
-            <span className="font-semibold text-ink text-[13px] tracking-[-0.02em]">ClientLens</span>
+            <span className="font-semibold text-ink text-[13px] tracking-[-0.02em]">Project Wingman</span>
             <span className="text-[9px] font-mono uppercase tracking-[0.14em] text-ink-4 mt-0.5">
               Sales Copilot
             </span>

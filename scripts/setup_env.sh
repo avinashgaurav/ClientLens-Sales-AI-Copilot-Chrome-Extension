@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Interactive .env file generator for local ClientLens development.
+# Interactive .env file generator for local Project Wingman development.
 #
 # Prompts for secrets silently (no echo, not stored in shell history) and writes
 # the values to `backend/.env` and `extension/.env`. Public values (URLs, OAuth
@@ -14,7 +14,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "── ClientLens local .env setup ──"
+echo "── Project Wingman local .env setup ──"
 echo
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ GEMINI_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 OPENROUTER_REFERER=https://clientlens.example.com
-OPENROUTER_TITLE=ClientLens
+OPENROUTER_TITLE=Project Wingman
 
 # ── Pinecone — intentionally empty (init skipped, embeddings stubbed) ─────────
 PINECONE_API_KEY=

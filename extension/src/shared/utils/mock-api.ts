@@ -129,7 +129,7 @@ function buildFallbackSlides(request: GenerationRequest, text: string) {
   return [
     {
       index: 0,
-      title: `ClientLens for ${request.company.name}`,
+      title: `Project Wingman for ${request.company.name}`,
       components: [{ type: "title_block", content: text.slice(0, 500) }],
       speaker_notes: "Opening slide",
     },

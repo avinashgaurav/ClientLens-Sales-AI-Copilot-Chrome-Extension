@@ -357,7 +357,7 @@ export function MeetingCopilotPanel() {
       const s = getSettings();
       const zoho = s.integrations.zoho;
       const custom = s.integrations.customTool;
-      const noteTitle = `ClientLens call · ${companyName}`;
+      const noteTitle = `Project Wingman call · ${companyName}`;
       const noteContent = summaryToMarkdown(summary, companyName, personaRole);
       if (zoho.connected && zoho.pushEnabled && zoho.fields.parentModule && zoho.fields.parentId) {
         const res = await pushZohoNote(zoho, {

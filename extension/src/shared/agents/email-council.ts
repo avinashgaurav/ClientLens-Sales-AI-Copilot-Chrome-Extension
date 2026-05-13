@@ -121,7 +121,7 @@ async function draftAgent(
   const used = kb.filter((e) => relevantIds.includes(e.id));
 
   const intentHint: Record<typeof input.intent, string> = {
-    intro: "Cold intro — pattern-match their industry + persona to a specific ClientLens outcome, offer a 20-min call. No product dump.",
+    intro: "Cold intro — pattern-match their industry + persona to a specific Project Wingman outcome, offer a 20-min call. No product dump.",
     follow_up: "Polite follow-up after silence. Add one new data point or case study. Soft CTA.",
     post_call: "Post-call recap. Mirror what they said, confirm next steps, attach proof points for anything flagged.",
     objection: "Handle the objection with specific facts. Don't argue — reframe with a comparable customer.",
@@ -129,7 +129,7 @@ async function draftAgent(
     custom: "Follow the user's custom instruction.",
   };
 
-  const system = `You are the Email Drafting Agent for ClientLens sales. Produce a concise, grounded email. No hype words ("revolutionary", "game-changing", "best-in-class"). Every numeric claim cites a source_id. Output strict JSON only.`;
+  const system = `You are the Email Drafting Agent for Project Wingman sales. Produce a concise, grounded email. No hype words ("revolutionary", "game-changing", "best-in-class"). Every numeric claim cites a source_id. Output strict JSON only.`;
   const user = `TONE RULES (persona=${profile?.label ?? input.persona_role}):
 Lead with: ${profile?.content_rules.lead_with.join(", ") ?? "business outcomes"}
 Avoid: ${profile?.content_rules.avoid.join(", ") ?? "jargon"}
@@ -187,9 +187,9 @@ async function brandCheckAgent(client: LLMClient, draft: EmailDraft, kb: KBEntry
   const brandVoice = kb.filter((e) => e.namespace === "brand_voice" && e.status === "ready");
   const guidance = brandVoice.map((e) => (e.content ?? "").slice(0, 1500)).join("\n\n");
 
-  const system = `You are the Brand Compliance Agent. Score the email against ClientLens voice. Output strict JSON.`;
+  const system = `You are the Brand Compliance Agent. Score the email against Project Wingman voice. Output strict JSON.`;
   const user = `GUIDANCE:
-${guidance || "ClientLens voice: direct, numbers-first, no hype. Banned: revolutionary, game-changing, best-in-class, world-class, synergy, cutting-edge."}
+${guidance || "Project Wingman voice: direct, numbers-first, no hype. Banned: revolutionary, game-changing, best-in-class, world-class, synergy, cutting-edge."}
 
 EMAIL:
 Subject: ${draft.subject}

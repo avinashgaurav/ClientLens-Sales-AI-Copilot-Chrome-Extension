@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # OpenRouter app attribution headers — recommended but optional.
     # https://openrouter.ai/docs/api-reference/overview#app-attribution
     openrouter_referer: str = "https://clientlens.example.com"
-    openrouter_title: str = "ClientLens"
+    openrouter_title: str = "Project Wingman"
 
     # Supabase
     supabase_url: str

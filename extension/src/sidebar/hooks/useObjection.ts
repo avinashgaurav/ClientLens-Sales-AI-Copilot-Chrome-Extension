@@ -38,7 +38,7 @@ export function useObjection() {
         } else if (event.type === "done") {
           setLastObjection(event.response);
           setGenerationProgress({ stage: "done", ...STAGE_INFO.done });
-          notify("ClientLens response ready", event.response.summary || "Click to review", "done");
+          notify("Project Wingman response ready", event.response.summary || "Click to review", "done");
         } else if (event.type === "error") {
           throw new Error(event.message);
         }

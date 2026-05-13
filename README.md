@@ -1,4 +1,4 @@
-# ClientLens — Sales Copilot Chrome Extension
+# Project Wingman — Sales Copilot Chrome Extension
 
 > Built for ZopDev Team. Internal-use only.
 

@@ -1,7 +1,7 @@
 """
 Knowledge-base smoke test for the OpenRouter proxy integration.
 
-Loads two Clientlens KB markdown files (FEATURES + RECOMMENDATION-RULES), chunks
+Loads two Project Wingman KB markdown files (FEATURES + RECOMMENDATION-RULES), chunks
 them the same way the extension's `chunker.ts` does, performs naive keyword
 retrieval per query, and calls OpenRouter with the top-K chunks stuffed into
 the system prompt. Validates that responses reference KB content.
@@ -163,7 +163,7 @@ def retrieve(query: str, chunks: list[Chunk], k: int = 5) -> list[tuple[Chunk, i
 # ── Prompt construction (council-style) ───────────────────────────────────────
 
 
-SYSTEM_PROMPT = """You are a senior sales engineer at Clientlens, a cloud cost optimization platform.
+SYSTEM_PROMPT = """You are a senior sales engineer at Project Wingman, a cloud cost optimization platform.
 You answer prospect questions using ONLY the knowledge base excerpts provided in the user message.
 Never invent feature names, rule IDs, or numbers. If the KB does not cover the question, say so.
 
@@ -254,11 +254,11 @@ def parse_json_envelope(text: str) -> Optional[dict]:
 
 QUERIES = [
     {
-        "question": "We have 200 idle EC2 instances. What does Clientlens do about them?",
+        "question": "We have 200 idle EC2 instances. What does Project Wingman do about them?",
         "expect_terms": ["idle", "schedule", "ec2"],
     },
     {
-        "question": "Does Clientlens track actual billing cost or just on-demand pricing? How does it handle reservations?",
+        "question": "Does Project Wingman track actual billing cost or just on-demand pricing? How does it handle reservations?",
         "expect_terms": ["billing", "reservation", "amortized"],
     },
     {
@@ -266,7 +266,7 @@ QUERIES = [
         "expect_terms": ["rds", "database"],
     },
     {
-        "question": "How does Clientlens discover Kubernetes workloads across EKS, GKE, and AKS?",
+        "question": "How does Project Wingman discover Kubernetes workloads across EKS, GKE, and AKS?",
         "expect_terms": ["k8s", "eks", "gke", "aks", "deployment"],
     },
 ]
@@ -286,7 +286,7 @@ def main() -> int:
         return 1
     model = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
     referer = os.environ.get("OPENROUTER_REFERER", "https://clientlens.example.com")
-    title = os.environ.get("OPENROUTER_TITLE", "ClientLens")
+    title = os.environ.get("OPENROUTER_TITLE", "Project Wingman")
     features_path = os.environ.get("KB_FEATURES_PATH", DEFAULT_FEATURES)
     rules_path = os.environ.get("KB_RULES_PATH", DEFAULT_RULES)
 
@@ -295,7 +295,7 @@ def main() -> int:
             print(f"KB file not found: {path}", file=sys.stderr)
             return 1
 
-    print("Clientlens KB · OpenRouter smoke test")
+    print("Project Wingman KB · OpenRouter smoke test")
     print(f"  model    {model}")
     print(f"  key      sk-or-v1-...  ({len(api_key)} chars)")
 

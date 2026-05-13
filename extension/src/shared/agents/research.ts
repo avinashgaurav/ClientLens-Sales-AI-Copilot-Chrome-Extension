@@ -147,7 +147,7 @@ Return JSON:
   "size_signal": "...",           // e.g. "mid-market SaaS", "enterprise fintech", or "unknown"
   "tech_signals": ["..."],        // concrete stacks/tools they mention using
   "named_customers": ["..."],     // only if a logo wall or explicit name appears
-  "pain_signals": ["..."],        // concrete challenges that ClientLens could help (cloud spend, scale, compliance)
+  "pain_signals": ["..."],        // concrete challenges that Project Wingman could help (cloud spend, scale, compliance)
   "recent_signals": ["..."]       // launches, funding, hiring hints
 }`;
 

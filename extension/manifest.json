@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "ClientLens \u2013 Sales Copilot",
+  "name": "Project Wingman \u2013 Sales Copilot",
   "version": "1.0.0",
   "description": "Live meeting copilot for sales \u2014 pitch generation, objection handling, on-screen transponder, and manual Zoho / Meet / Zoom integrations.",
   "icons": {

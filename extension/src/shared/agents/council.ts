@@ -5,7 +5,7 @@
  * Pipeline:
  *   1. Retrieval          — pulls relevant KB chunks
  *   2. ICP Personalization — rewrites to nearest ICP rules
- *   3. Brand Compliance    — enforces ClientLens voice + design system
+ *   3. Brand Compliance    — enforces Project Wingman voice + design system
  *   4. Fact / Validation   — every claim must trace to KB
  *   5. Council vote        — all 4 must pass; else regenerate or flag
  */
@@ -203,7 +203,7 @@ async function retrievalAgent(
     };
   }
 
-  const system = `You are the Retrieval Agent for ClientLens's sales council. Identify the KB sources that directly support a personalized deck for this target. Output strict JSON only.`;
+  const system = `You are the Retrieval Agent for Project Wingman's sales council. Identify the KB sources that directly support a personalized deck for this target. Output strict JSON only.`;
   const user = `TARGET:
 - Company: ${input.company_name}
 - Persona: ${input.persona_role}
@@ -275,7 +275,7 @@ async function icpPersonalizationAgent(
       : "Output is a CUSTOM DOC and the user did NOT describe it. AUTO-DETECT the right shape from the surrounding context: persona role, deal size, meeting stage, prospect research signals, and KB namespaces present. Pick ONE concrete shape (e.g. RFP response, security questionnaire reply, partner brief, exec memo, technical proposal) and execute it well. State the inferred shape in the first slide title.",
   };
 
-  const system = `You are the ICP Personalization Agent. Draft a ${icp.label}-tailored deck grounded ONLY in the cited sources. Use ClientLens product facts verbatim (317 rules, up to 60%, ISO 27001 + SOC 2 Type II, <5 min setup, 30-day pilot). Do NOT invent customer logos, savings figures, or quotes.
+  const system = `You are the ICP Personalization Agent. Draft a ${icp.label}-tailored deck grounded ONLY in the cited sources. Use Project Wingman product facts verbatim (317 rules, up to 60%, ISO 27001 + SOC 2 Type II, <5 min setup, 30-day pilot). Do NOT invent customer logos, savings figures, or quotes.
 
 FORMAT: ${format.replace(/_/g, " ")}. ${formatDirective[format]}`;
 
@@ -353,9 +353,9 @@ async function brandComplianceAgent(
     ...designSystem.map((e) => `DESIGN SYSTEM (${e.name}):\n${e.content.slice(0, 2000)}`),
   ].join("\n\n");
 
-  const fallbackVoice = `ClientLens voice: direct, numbers-first, no hype. Avoid "revolutionary", "game-changing", "best-in-class", "world-class". Use "317 rules", "up to 60%", "30-day pilot", "read-only", "no agents".`;
+  const fallbackVoice = `Project Wingman voice: direct, numbers-first, no hype. Avoid "revolutionary", "game-changing", "best-in-class", "world-class". Use "317 rules", "up to 60%", "30-day pilot", "read-only", "no agents".`;
 
-  const system = `You are the Brand Compliance Agent. Check the draft against ClientLens voice and design system. Output strict JSON.`;
+  const system = `You are the Brand Compliance Agent. Check the draft against Project Wingman voice and design system. Output strict JSON.`;
   const user = `GUIDANCE:
 ${guidance || fallbackVoice}
 
@@ -406,7 +406,7 @@ async function validationAgent(
   const user = `SOURCES (ground truth):
 ${summarizeKB(usedSources)}
 
-Baseline facts that are ALWAYS safe to use verbatim (from ClientLens product):
+Baseline facts that are ALWAYS safe to use verbatim (from Project Wingman product):
 - 317 recommendation rules across AWS + GCP + Azure
 - AWS 33 / GCP 16 / Azure 24 resource types
 - Up to 60% first-scan savings
@@ -508,7 +508,7 @@ export async function* runCouncil(opts: {
       }
       draft = icp.draft;
 
-      yield { type: "stage", stage: "brand_check", message: "Checking ClientLens brand compliance…" };
+      yield { type: "stage", stage: "brand_check", message: "Checking Project Wingman brand compliance…" };
       brandResult = await brandComplianceAgent(client, draft, kb);
       yield { type: "agent", result: brandResult };
 

@@ -88,7 +88,7 @@ function showInsertOverlay(content: { title: string; content: string; type: stri
   header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;";
   const headerLabel = document.createElement("span");
   headerLabel.style.cssText = "font-weight:600;color:#a78bfa;";
-  headerLabel.textContent = "ClientLens — Generated Content";
+  headerLabel.textContent = "Project Wingman — Generated Content";
   const closeBtn = document.createElement("button");
   closeBtn.id = "zn-close";
   closeBtn.style.cssText = "background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px;";

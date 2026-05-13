@@ -13,7 +13,7 @@ from models import GenerationRequest, AgentResult
 from rag.retriever import retrieve_context
 from config import settings
 
-SYSTEM_PROMPT = """You are a RAG retrieval agent for ClientLens's sales intelligence system.
+SYSTEM_PROMPT = """You are a RAG retrieval agent for Project Wingman's sales intelligence system.
 
 Your job is to:
 1. Identify what content is needed based on the generation request

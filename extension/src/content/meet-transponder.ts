@@ -729,7 +729,7 @@ function render() {
     ? `<span class="cl-pace ${paceCls}" title="${escapeHtml(pacing.label)}">${pacing.coveredCount}/${pacing.totalCount} agenda</span>`
     : "";
   const chipHtml = `<span class="cl-chip">
-      <span class="cl-chip-co">${escapeHtml(inp?.company_name || "ClientLens")}</span>
+      <span class="cl-chip-co">${escapeHtml(inp?.company_name || "Project Wingman")}</span>
       <span class="cl-chip-sep">·</span>
       ${moodPill}
       <span class="cl-chip-sep">·</span>
@@ -987,7 +987,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   const m = msg as { type: string; payload?: unknown };
   if (m.type === "MC_TRANSPONDER_OPEN") {
     // Session was started from the side-panel entry point. Suppress the
-    // in-call "Start ClientLens?" prompt and tear it down if already shown,
+    // in-call "Start Project Wingman?" prompt and tear it down if already shown,
     // so the rep doesn't get asked twice for the same call.
     sessionStarted = true;
     dismissPrompt();
@@ -1178,7 +1178,7 @@ function showStartPrompt() {
   promptEl = document.createElement("div");
   promptEl.id = PROMPT_ID;
   promptEl.innerHTML = `
-    <div class="cl-p-title">Start ClientLens for this call?</div>
+    <div class="cl-p-title">Start Project Wingman for this call?</div>
     <div class="cl-p-sub">Live transcription, sentiment and coach nudges. Read-only — nothing is posted anywhere.</div>
     <div class="cl-p-row">
       <button class="cl-p-btn" data-p="start">Start copilot</button>

@@ -1,12 +1,12 @@
 /** @type {import('tailwindcss').Config}
  *
- * Clientlens design-system bridge.
+ * Project Wingman design-system bridge.
  *
  * Rather than sweep every V1 component's Tailwind classes, we remap the
  * scales the existing code already uses so the whole app inherits the
  * brand automatically:
  *
- *   slate-*   → Clientlens ink/line ladder (cream text on dark surfaces)
+ *   slate-*   → Project Wingman ink/line ladder (cream text on dark surfaces)
  *   violet-*  → orange  (primary accent / CTA)
  *   emerald-* → green   (success, "live")
  *   red-*     → err (#F87171)

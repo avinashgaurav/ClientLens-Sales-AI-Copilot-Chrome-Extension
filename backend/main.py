@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ClientLens – Sales Copilot API",
+    title="Project Wingman – Sales Copilot API",
     version="1.0.0",
     lifespan=lifespan,
 )

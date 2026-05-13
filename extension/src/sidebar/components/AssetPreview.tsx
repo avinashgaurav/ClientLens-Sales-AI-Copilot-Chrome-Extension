@@ -166,7 +166,7 @@ export function AssetPreview() {
           />
         </div>
         <p className="text-[10px] text-slate-500">
-          Sampled from the logo. Used for accents only — ClientLens brand stays dominant.
+          Sampled from the logo. Used for accents only — Project Wingman brand stays dominant.
         </p>
       </div>
 

@@ -47,7 +47,7 @@ export function usePageContext() {
         setDocumentState(docState);
       }
     } catch (err) {
-      console.warn("[ClientLens] Context detection failed:", err);
+      console.warn("[Project Wingman] Context detection failed:", err);
     }
   }, [setCompany, setDocumentState]);
 
