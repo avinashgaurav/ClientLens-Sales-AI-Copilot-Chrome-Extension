@@ -39,7 +39,7 @@ export function UsageMeter() {
   return (
     <div
       className={`hidden sm:flex items-center gap-1.5 px-2 py-1 border ${
-        near ? "border-brand-orange text-brand-orange" : "border-line text-ink-4"
+        near ? "border-orange text-orange" : "border-line text-ink-4"
       } bg-surface-2`}
       title={cap > 0 ? `${used} of ${cap} ${label} requests today` : `${used} ${label} requests today`}
     >

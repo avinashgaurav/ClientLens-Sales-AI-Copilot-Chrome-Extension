@@ -1,6 +1,6 @@
 # ClientLens — Sales Copilot Chrome Extension
 
-> Built for Clientlens's sales team. Internal-use only.
+> Built for ZopDev Team. Internal-use only.
 
 An AI-powered Chrome extension that helps sales reps generate personalized pitches, handle live meetings with a real-time copilot, and manage objections — all from the browser sidebar.
 

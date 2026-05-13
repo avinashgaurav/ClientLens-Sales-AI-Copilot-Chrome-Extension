@@ -36,8 +36,8 @@ export function Header() {
     <>
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-line bg-surface-1">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-brand-orange flex items-center justify-center">
-            <span className="text-[11px] font-bold text-brand-black font-mono">CL</span>
+          <div className="w-6 h-6 bg-orange flex items-center justify-center">
+            <span className="text-[11px] font-bold text-black font-mono">CL</span>
           </div>
           <div className="flex flex-col leading-none">
             <span className="font-semibold text-ink text-[13px] tracking-[-0.02em]">ClientLens</span>
@@ -52,7 +52,7 @@ export function Header() {
           <UsageMeter />
           <button
             onClick={requestOpenSettings}
-            className="p-1.5 text-ink-3 hover:text-brand-orange hover:bg-surface-2 transition-colors"
+            className="p-1.5 text-ink-3 hover:text-orange hover:bg-surface-2 transition-colors"
             title="Settings — admin passcode required"
             aria-label="Settings"
           >

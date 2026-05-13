@@ -16,7 +16,7 @@ export function LiveModeToggle() {
       <div
         className={`w-full flex items-center justify-between px-3 py-2 border transition-colors ${
           isLiveMode
-            ? "border-brand-orange/60 bg-[rgba(245,133,73,0.08)]"
+            ? "border-orange/60 bg-[rgba(245,133,73,0.08)]"
             : "border-line bg-surface-1 hover:border-line-2"
         }`}
       >
@@ -28,13 +28,13 @@ export function LiveModeToggle() {
         >
           <Radio
             size={13}
-            className={isLiveMode ? "text-brand-orange animate-pulse" : "text-ink-3"}
+            className={isLiveMode ? "text-orange animate-pulse" : "text-ink-3"}
           />
           <span className={`text-xs font-semibold tracking-[-0.01em] ${isLiveMode ? "text-ink" : "text-ink-2"}`}>
             Live Meeting Mode
           </span>
           <span className={`text-[9px] font-mono uppercase tracking-[0.14em] ${
-            isLiveMode ? "text-brand-orange" : "text-ink-4"
+            isLiveMode ? "text-orange" : "text-ink-4"
           }`}>
             {isLiveMode ? "ON" : "OFF"}
           </span>
@@ -55,12 +55,12 @@ export function LiveModeToggle() {
           type="button"
           onClick={() => setIsLiveMode(!isLiveMode)}
           className={`relative w-8 h-4 transition-colors ${
-            isLiveMode ? "bg-brand-orange" : "bg-surface-3 border border-line-2"
+            isLiveMode ? "bg-orange" : "bg-surface-3 border border-line-2"
           }`}
           aria-label="Toggle Live Meeting Mode"
         >
           <span
-            className={`absolute top-0.5 w-3 h-3 bg-brand-cream transition-all ${
+            className={`absolute top-0.5 w-3 h-3 bg-cream transition-all ${
               isLiveMode ? "left-[18px]" : "left-0.5"
             }`}
           />
@@ -72,7 +72,7 @@ export function LiveModeToggle() {
           role="tooltip"
           className="absolute z-20 left-0 right-0 top-full mt-1 bg-surface-2 border border-line p-3 shadow-hover-ink"
         >
-          <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-brand-orange mb-1.5">
+          <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-orange mb-1.5">
             Live Meeting Mode
           </div>
           <p className="text-[11px] text-ink-2 leading-relaxed">{EXPLAINER}</p>

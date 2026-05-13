@@ -32,7 +32,7 @@ export function ICPSelector() {
               onClick={() => setIcpRole(profile.role as ICPRole)}
               className={`flex flex-col items-center gap-1 p-2 border text-center transition-colors ${
                 active
-                  ? "border-brand-orange bg-brand-orange/10 text-brand-orange"
+                  ? "border-orange bg-orange/10 text-orange"
                   : "border-line bg-surface-2 text-ink-3 hover:border-line-2 hover:text-ink"
               }`}
             >
@@ -50,7 +50,7 @@ export function ICPSelector() {
             {selected.content_rules.block_types.map((bt) => (
               <span
                 key={bt}
-                className="text-[10px] px-1.5 py-0.5 bg-brand-orange/10 text-brand-orange border border-brand-orange/40 font-mono"
+                className="text-[10px] px-1.5 py-0.5 bg-orange/10 text-orange border border-orange/40 font-mono"
               >
                 {bt.replace("_", " ")}
               </span>

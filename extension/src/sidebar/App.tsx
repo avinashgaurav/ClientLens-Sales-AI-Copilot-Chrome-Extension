@@ -63,8 +63,8 @@ export default function App() {
       id: "form",
       label: "Generate",
       icon: <FileText size={12} />,
-      activeBg: "bg-brand-orange",
-      activeText: "text-brand-black",
+      activeBg: "bg-orange",
+      activeText: "text-black",
     },
     ...(hasKBAccess
       ? [
@@ -72,8 +72,8 @@ export default function App() {
             id: "kb" as const,
             label: "Knowledge",
             icon: <BookOpen size={12} />,
-            activeBg: "bg-brand-blue",
-            activeText: "text-brand-cream",
+            activeBg: "bg-blue",
+            activeText: "text-cream",
           },
         ]
       : []),
@@ -83,8 +83,8 @@ export default function App() {
             id: "copilot" as const,
             label: "Copilot",
             icon: <Radio size={12} />,
-            activeBg: "bg-brand-green",
-            activeText: "text-brand-black",
+            activeBg: "bg-green",
+            activeText: "text-black",
           },
         ]
       : []),

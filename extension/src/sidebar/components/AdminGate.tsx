@@ -55,7 +55,7 @@ export function AdminGate({ open, onUnlock, onClose }: Props) {
     <div className="fixed inset-0 z-[10000] bg-black/70 flex items-start justify-center pt-24">
       <div className="w-[320px] bg-surface-1 border border-line shadow-xl">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
-          {mode === "set" ? <ShieldCheck size={14} className="text-brand-orange" /> : <Lock size={14} className="text-brand-orange" />}
+          {mode === "set" ? <ShieldCheck size={14} className="text-orange" /> : <Lock size={14} className="text-orange" />}
           <span className="text-[12px] font-semibold text-ink">
             {mode === "set" ? "Set admin passcode" : "Admin access required"}
           </span>
@@ -74,7 +74,7 @@ export function AdminGate({ open, onUnlock, onClose }: Props) {
             placeholder="Passcode"
             autoComplete="off"
             spellCheck={false}
-            className="w-full border border-line bg-surface-0 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
+            className="w-full border border-line bg-surface-0 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-orange"
           />
           {mode === "set" && (
             <input
@@ -84,7 +84,7 @@ export function AdminGate({ open, onUnlock, onClose }: Props) {
               placeholder="Confirm passcode"
               autoComplete="off"
               spellCheck={false}
-              className="w-full border border-line bg-surface-0 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-brand-orange"
+              className="w-full border border-line bg-surface-0 px-2.5 py-1.5 text-xs font-mono text-ink placeholder-ink-4 focus:outline-none focus:border-orange"
             />
           )}
           {error && <div className="text-[11px] text-red-400">{error}</div>}
@@ -99,7 +99,7 @@ export function AdminGate({ open, onUnlock, onClose }: Props) {
             <button
               type="submit"
               disabled={busy}
-              className="px-3 py-1 text-[11px] font-semibold bg-brand-orange text-brand-black hover:brightness-110 disabled:opacity-50"
+              className="px-3 py-1 text-[11px] font-semibold bg-orange text-black hover:brightness-110 disabled:opacity-50"
             >
               {mode === "set" ? "Set & unlock" : "Unlock"}
             </button>
