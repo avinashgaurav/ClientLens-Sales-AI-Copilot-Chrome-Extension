@@ -14,13 +14,27 @@ from __future__ import annotations
 
 import httpx
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from config import settings
+from rbac.roles import require_permission
 
 router = APIRouter()
 log = structlog.get_logger()
+
+
+# Zoho data-centre allowlist. Validating against a known set prevents a caller
+# from steering the token-exchange POST at an attacker-controlled host like
+# accounts.zoho.<anything>. Keep in sync with Zoho's published DC list.
+_ALLOWED_ZOHO_DCS = {"com", "eu", "in", "com.cn", "com.au", "jp"}
+
+
+def _resolve_dc(raw: str) -> str:
+    dc = "".join(c for c in (raw or "") if c.isalpha() or c == ".").strip(".") or "com"
+    if dc not in _ALLOWED_ZOHO_DCS:
+        raise HTTPException(400, f"Unsupported Zoho data centre: {dc!r}")
+    return dc
 
 
 class ZohoRefreshRequest(BaseModel):
@@ -35,18 +49,23 @@ class ZohoExchangeRequest(BaseModel):
 
 
 @router.post("/v1/zoho/exchange")
-async def zoho_exchange(body: ZohoExchangeRequest):
+async def zoho_exchange(request: Request, body: ZohoExchangeRequest):
     """Exchange a Zoho authorization code for access + refresh tokens.
 
     The client_id and client_secret are read from server environment variables
-    so they never touch the browser.
+    so they never touch the browser. Restricted to crm:connect roles so a
+    viewer-role JWT cannot mint a CRM token off the server's client_secret
+    (issue #34).
     """
+    user = request.state.user
+    require_permission(user["role"], "crm:connect")
+
     client_id = settings.zoho_client_id
     client_secret = settings.zoho_client_secret
     if not client_id or not client_secret:
         raise HTTPException(503, "Zoho credentials not configured on the server.")
 
-    dc = "".join(c for c in body.dc if c.isalpha() or c == ".").strip(".") or "com"
+    dc = _resolve_dc(body.dc)
     accounts_url = f"https://accounts.zoho.{dc}/oauth/v2/token"
 
     async with httpx.AsyncClient(timeout=15) as client:
@@ -76,12 +95,16 @@ async def zoho_exchange(body: ZohoExchangeRequest):
 
 
 @router.post("/v1/zoho/refresh")
-async def zoho_refresh(body: ZohoRefreshRequest):
+async def zoho_refresh(request: Request, body: ZohoRefreshRequest):
     """Exchange a Zoho refresh token for a new access token.
 
     The client_id and client_secret are read from server environment variables
     (ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET) so they never touch the browser.
+    Restricted to crm:connect roles (issue #34).
     """
+    user = request.state.user
+    require_permission(user["role"], "crm:connect")
+
     client_id = settings.zoho_client_id
     client_secret = settings.zoho_client_secret
     if not client_id or not client_secret:
@@ -91,8 +114,7 @@ async def zoho_refresh(body: ZohoRefreshRequest):
             "Set ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET in the backend .env.",
         )
 
-    # Sanitise the dc suffix — only lowercase letters and dots.
-    dc = "".join(c for c in body.dc if c.isalpha() or c == ".").strip(".") or "com"
+    dc = _resolve_dc(body.dc)
     accounts_url = f"https://accounts.zoho.{dc}/oauth/v2/token"
 
     async with httpx.AsyncClient(timeout=15) as client:

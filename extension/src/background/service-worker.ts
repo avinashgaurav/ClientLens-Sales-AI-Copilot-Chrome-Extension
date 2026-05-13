@@ -89,10 +89,10 @@ chrome.runtime.onMessage.addListener(
 
       case "FETCH_URL_TEXT":
         // SSRF guard (#35): only allow this from internal extension pages
-        // (sidebar, popup, options). A message originating from a content
-        // script — even one injected by us — has `sender.tab` set; reject
-        // those so a malicious page can't relay FETCH_URL_TEXT through the
-        // content script to fetch arbitrary URLs (including http://localhost).
+        // (sidebar/popup/options). A message originating from a content
+        // script has `sender.tab` set; reject those so a malicious page
+        // can't relay FETCH_URL_TEXT through a content script to fetch
+        // arbitrary URLs (including http://localhost).
         if (sender.id !== chrome.runtime.id || sender.tab) {
           sendResponse({ success: false, error: "untrusted sender" });
           return false;
