@@ -6,7 +6,7 @@
 // Each agent is a pure function over (session state, KB) that returns
 // an incremental update. Orchestration cadence lives in live-orchestrator.ts.
 
-import { embedText, makeLLMClient, resolveLLMConfig, type LLMProvider } from "../../shared/agents/llm-client";
+import { embedText, makeLLMClient, resolveLLMConfig, backendUrl, backendJwt, type LLMProvider } from "../../shared/agents/llm-client";
 import type {
   AgendaItem,
   CoachSuggestion,
@@ -43,10 +43,14 @@ function liveWindow(transcript: TranscriptSegment[]): string {
 
 // Per-provider fast-tier model. Live agents use this; council/email keep
 // whatever the user picked in Settings.
+// For OpenRouter we pick the smallest reliable free model so parallel agent
+// calls don't stack up on the 429-prone 70B quota. 8B instant is ~3× faster
+// and shares a different rate-limit bucket from the main model.
 const LIVE_MODELS: Record<LLMProvider, string | undefined> = {
   anthropic: "claude-haiku-4-5-20251001",
   gemini: "gemini-2.0-flash-lite",
   groq: "llama-3.1-8b-instant",
+  openrouter: "openai/gpt-oss-20b:free",  // 8B had ~256 token cap on free tier; GPT-OSS 20B returns complete JSON
   ollama: undefined,   // user's local model
   custom: undefined,   // user's custom endpoint
 };
@@ -60,15 +64,24 @@ function liveModelOverride(): { provider: LLMProvider; model: string } | undefin
 }
 
 function safeJson<T>(raw: string): T | null {
-  const trimmed = raw.trim().replace(/^```(?:json)?/, "").replace(/```$/, "").trim();
+  // Strip markdown code fences — models sometimes wrap JSON even when told not to.
+  // Handle both single-line (```json{...}```) and multi-line variants.
+  const trimmed = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
   try { return JSON.parse(trimmed) as T; } catch { /* fall through */ }
+  // Try to extract the outermost {...} block if there's leading/trailing prose.
   const m = trimmed.match(/\{[\s\S]*\}/);
   if (m) {
     try { return JSON.parse(m[0]) as T; } catch { /* fall through */ }
   }
-  // Log the head of the raw output so we can see which model/provider is
-  // producing bad JSON without silently dropping the coach.
-  console.warn("[live-agents] JSON parse failed, raw head:", raw.slice(0, 200));
+  // Log full raw length + head so we can tell if it's truncation vs bad format.
+  console.warn(
+    `[live-agents] JSON parse failed (raw ${raw.length} chars), head:`,
+    raw.slice(0, 300),
+  );
   return null;
 }
 
@@ -347,7 +360,7 @@ Produce JSON only.`;
     : undefined;
 
   let raw = "";
-  try { raw = await callLiveLLM(COACH_SYSTEM, user, 500, streamCb); } catch (err) {
+  try { raw = await callLiveLLM(COACH_SYSTEM, user, 700, streamCb); } catch (err) {
     // Rethrow so the orchestrator can count consecutive failures and surface
     // a banner. Returning [] silently hid kill-switch conditions (wrong key,
     // quota hit, stalled stream) from the user.
@@ -449,6 +462,15 @@ function cacheVerdict(s: CoachSuggestion, outcome: LiveValidationOutcome): void 
     const oldest = [...VALIDATOR_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
     if (oldest) VALIDATOR_CACHE.delete(oldest[0]);
   }
+}
+
+/**
+ * Clear all cached validator verdicts. Call at session start so stale
+ * approvals/rejections from a previous call don't bleed into a new session.
+ * (The 30 s TTL alone isn't enough when sessions are back-to-back.)
+ */
+export function clearValidatorCache(): void {
+  VALIDATOR_CACHE.clear();
 }
 
 export async function runLiveCouncilValidator(
@@ -555,6 +577,7 @@ export async function runLiveKbAsk(
   question: string,
   session: MeetingSession,
   kb: KBEntry[],
+  signal?: AbortSignal,
 ): Promise<{ answer: string; sources?: { kb_entry_id: string; quote: string }[]; rejected?: boolean }> {
   const q = question.trim();
   if (!q) return { answer: "Empty question." };
@@ -566,16 +589,38 @@ export async function runLiveKbAsk(
 
   const user = `Question: ${q}\n\nKB:\n${JSON.stringify(kbJson)}\n\nJSON only.`;
 
-  // Mid-call latency budget is tight — the rep asked while the prospect is
-  // talking. Use the fast live-tier model (haiku/flash-lite) and skip the
-  // validator pass: the answer prompt already enforces "quote KB verbatim,
-  // never invent," which is enough for a quick-look in-call answer. The
-  // earlier 2-call (answer + council) flow took ~6-10s and was unusable
-  // live. `session` is intentionally unused now but kept in the signature
-  // for callers that may re-add validation later.
+  // Mid-call latency: use a small fast model (8B) on a separate OpenRouter
+  // rate-limit pool from the coach (20B). KB output is ≤350 tokens — no
+  // truncation risk at 8B. X-Priority header routes through the user lane
+  // on the backend (separate semaphore, no gap wait).
   void session;
+  const cfg = resolveLLMConfig(liveModelOverride());
+  const provider = "error" in cfg ? "openrouter" : cfg.provider;
+  // Force a fast small model for KB asks — separate rate pool from coach.
+  const KB_FAST_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
   let raw = "";
-  try { raw = await callLiveLLM(KB_ASK_SYSTEM, user, 350); } catch (err) {
+  try {
+    const jwt = await backendJwt();
+    const res = await fetch(`${backendUrl()}/api/v1/llm/complete`, {
+      method: "POST",
+      signal,  // AbortSignal — cancelled when rep asks a new question
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${jwt}`,
+        "X-Priority": "true",
+      },
+      body: JSON.stringify({
+        provider,
+        model: KB_FAST_MODEL,
+        system: KB_ASK_SYSTEM,
+        user,
+        max_tokens: 350,
+      }),
+    });
+    if (!res.ok) return { answer: "Error reaching backend" };
+    const data = await res.json() as { text?: string };
+    raw = data.text ?? "";
+  } catch (err) {
     return { answer: `Error: ${String(err)}` };
   }
   const parsed = safeJson<{ answer: string; sources?: { kb_entry_id: string; quote: string }[] }>(raw);

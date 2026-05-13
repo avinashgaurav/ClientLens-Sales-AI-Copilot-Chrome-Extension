@@ -83,9 +83,26 @@ function filterKB(kb: KBEntry[], input: PersonalizationInput): KBEntry[] {
   });
 }
 
-function summarizeKB(kb: KBEntry[]): string {
+// Rank KB entries by keyword overlap with a query string before slicing,
+// so the most relevant sources make it into the LLM context window instead
+// of whichever 20 happen to be at the top of the insertion-order list.
+function rankKBByQuery(kb: KBEntry[], query: string): KBEntry[] {
+  if (!query.trim()) return kb;
+  const terms = query.toLowerCase().split(/\W+/).filter((t) => t.length > 2);
+  if (!terms.length) return kb;
+  return [...kb].sort((a, b) => {
+    const scoreEntry = (e: KBEntry) => {
+      const haystack = `${e.name} ${e.content ?? ""}`.toLowerCase();
+      return terms.reduce((s, t) => s + (haystack.includes(t) ? 1 : 0), 0);
+    };
+    return scoreEntry(b) - scoreEntry(a);
+  });
+}
+
+function summarizeKB(kb: KBEntry[], query?: string): string {
   if (!kb.length) return "(knowledge base is empty)";
-  return kb
+  const ranked = query ? rankKBByQuery(kb, query) : kb;
+  return ranked
     .slice(0, 20)
     .map((e, i) => {
       const body = e.content ? e.content.slice(0, 1500) : `[${e.status} — ${e.name}]`;
@@ -98,13 +115,37 @@ export function extractJson<T>(text: string): T | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]+?)```/);
   const candidates: string[] = [];
   if (fenced?.[1]) candidates.push(fenced[1].trim());
-  // Balanced-brace scan: find every { ... } block at top level.
-  const start = text.indexOf("{");
-  if (start !== -1) {
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (let i = start; i < text.length; i++) {
+
+  // Handle array-root responses like [{...}] — common from Groq/OpenRouter free models.
+  // Unwrap the first element if it matches the expected shape.
+  const arrayStart = text.indexOf("[");
+  const objectStart = text.indexOf("{");
+  if (arrayStart !== -1 && (objectStart === -1 || arrayStart < objectStart)) {
+    let depth = 0, inStr = false, esc = false;
+    for (let i = arrayStart; i < text.length; i++) {
+      const c = text[i];
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === "[" || c === "{") depth++;
+      else if (c === "]" || c === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const arr = JSON.parse(text.slice(arrayStart, i + 1));
+            if (Array.isArray(arr) && arr.length > 0) candidates.push(JSON.stringify(arr[0]));
+          } catch { /* not valid JSON */ }
+          break;
+        }
+      }
+    }
+  }
+
+  // Balanced-brace scan for object-root responses.
+  if (objectStart !== -1) {
+    let depth = 0, inStr = false, esc = false;
+    for (let i = objectStart; i < text.length; i++) {
       const c = text[i];
       if (esc) { esc = false; continue; }
       if (c === "\\") { esc = true; continue; }
@@ -114,12 +155,13 @@ export function extractJson<T>(text: string): T | null {
       else if (c === "}") {
         depth--;
         if (depth === 0) {
-          candidates.push(text.slice(start, i + 1));
+          candidates.push(text.slice(objectStart, i + 1));
           break;
         }
       }
     }
   }
+
   for (const raw of candidates) {
     try { return JSON.parse(raw) as T; } catch { /* try next */ }
   }
@@ -173,7 +215,7 @@ async function retrievalAgent(
 - Pain points: ${input.pain_points ?? "n/a"}
 ${brief ? `\nPROSPECT RESEARCH:\n${briefToPrompt(brief)}\n` : ""}
 KB:
-${summarizeKB(filtered)}
+${summarizeKB(filtered, `${input.company_name} ${input.pain_points ?? ""} ${input.competitor ?? ""}`)}
 
 Return JSON:
 {
@@ -182,7 +224,7 @@ Return JSON:
   "missing_info": ["what the KB does not cover for this target"]
 }`;
 
-  const text = await callLLM(client, system, user, 2000);
+  const text = await callLLM(client, system, user, 800);
   const parsed = extractJson<RetrievalOutput>(text) ?? {
     relevant_source_ids: filtered.slice(0, 5).map((e) => e.id),
     citations: [],
@@ -253,7 +295,7 @@ ${brief ? `\nPROSPECT RESEARCH (use this to personalize — pattern-match to the
 SOURCES (use ONLY these — cite source_id on each claim):
 ${summarizeKB(usedSources)}
 
-Output JSON:
+Output JSON (COMPACT — every character counts, keep content tight):
 {
   "slides": [
     {
@@ -265,9 +307,9 @@ Output JSON:
   ]
 }
 
-Produce 5–7 slides. Every numeric claim must be traceable to a source_id above.`;
+Produce 3 slides. Keep each slide title ≤10 words, content ≤50 words, speaker_notes ≤25 words. Every numeric claim must cite a source_id.`;
 
-  const text = await callLLM(client, system, user, 3500);
+  const text = await callLLM(client, system, user, 1800);
   const parsed = extractJson<{ slides: SlideContent[] }>(text);
 
   if (!parsed?.slides?.length) {
@@ -387,7 +429,10 @@ Return JSON:
   const text = await callLLM(client, system, user, 2000);
   const parsed = extractJson<FactCheck>(text) ?? { grounded: true, claims: [], hallucinations: [] };
 
-  const status = parsed.hallucinations.length > 0 ? "fail" : "pass";
+  // "warn" instead of "fail" — flagged items are often legitimate KB content
+  // the retrieval agent didn't select, not actual hallucinations. Hard "fail"
+  // here was blocking every pitch even when ICP output was perfectly usable.
+  const status = parsed.hallucinations.length > 0 ? "warn" : "pass";
   return {
     agent: "validation",
     status,
@@ -399,7 +444,7 @@ Return JSON:
 
 // ─── Council Orchestrator ─────────────────────────────────────────────────────
 
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 0; // free-tier: single pass only (4 LLM calls total); retry loop caused double-run on validation "warn"
 
 export async function* runCouncil(opts: {
   input: PersonalizationInput;
@@ -488,13 +533,17 @@ export async function* runCouncil(opts: {
     yield { type: "stage", stage: "generating", message: "Council vote…" };
 
     const agents = [retrieval, icpResult!, brandResult!, validationResult!];
-    const councilPass = agents.every((a) => a.status !== "fail") && validationResult!.status === "pass";
+    // Accept "warn" from validation — only hard "fail" on ALL agents blocks output.
+    // Previously requiring validationResult === "pass" caused the retry loop to
+    // always fire (validation rarely returns "pass" on first attempt with free
+    // models), doubling the LLM call count and making it look like agents re-ran.
+    const councilPass = agents.every((a) => a.status !== "fail");
 
     if (!councilPass) {
       const issues = agents.flatMap((a) => a.issues ?? []);
       yield {
         type: "error",
-        message: `Council rejected the draft after ${attempt} retries. Issues: ${issues.slice(0, 3).join("; ")}`,
+        message: `Council could not produce a draft. Issues: ${issues.slice(0, 3).join("; ")}`,
       };
       return;
     }

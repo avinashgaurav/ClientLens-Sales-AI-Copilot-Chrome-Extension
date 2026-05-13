@@ -24,8 +24,25 @@ export interface IntegrationConfig {
 
 export interface UserSettings {
   provider: LLMProvider;
+  /**
+   * @deprecated since #1 — Anthropic is routed through the FastAPI backend.
+   * The extension never holds an Anthropic key. Field kept to avoid breaking
+   * older hydrated payloads; ignored on read. Will be removed in a follow-up
+   * after the migration window.
+   */
   anthropicKey: string;
+  /**
+   * @deprecated since #1 — Gemini chat + embeddings are routed through the
+   * FastAPI backend (`/api/v1/llm/{complete,stream,embed}`). The extension
+   * never holds a Gemini key. Field kept to avoid breaking older hydrated
+   * payloads; ignored on read.
+   */
   geminiKey: string;
+  /**
+   * @deprecated since #1 — Groq is routed through the FastAPI backend.
+   * The extension never holds a Groq key. Field kept to avoid breaking
+   * older hydrated payloads; ignored on read.
+   */
   groqKey: string;
   customLabel: string;
   customBaseUrl: string;
@@ -41,24 +58,46 @@ const EMPTY_INTEGRATION: IntegrationConfig = {
   fields: {},
 };
 
-// OpenRouter example — shown as a placeholder so users can see what a working
-// OpenAI-compatible endpoint configuration looks like. No key is bundled; the
-// user pastes their own from the Settings UI.
-const OPENROUTER_EXAMPLE = {
-  customLabel: "OpenRouter",
-  customBaseUrl: "https://openrouter.ai/api/v1",
-  customModel: "anthropic/claude-haiku-4.5",
+// Shipped Gemini key — historically backfilled so the Gemini provider had a
+// working credential. As of #1, Gemini is proxied via the backend and no
+// extension-side key is ever used. The constant is retained only for
+// backwards-compat with imports; new installs leave `geminiKey` empty.
+const GEMINI_PRESET_KEY = "";
+void (import.meta.env.VITE_GEMINI_PRESET_KEY); // silence unused-env lint
+
+// Active default: Custom provider pointed at Groq's OpenAI-compatible endpoint.
+// Groq is faster than Gemini for the live coach loop and the user supplied a
+// fresh key for this purpose.
+const GROQ_CUSTOM_PRESET = {
+  customLabel: "Groq",
+  customBaseUrl: "https://api.groq.com/openai/v1",
+  customModel: "llama-3.3-70b-versatile",
+  customKey: import.meta.env.VITE_GROQ_PRESET_KEY ?? "",
 } as const;
 
+// Known-stale shipped credentials we proactively migrate away from when an
+// older install loads the new build. Without these checks, hydrate's
+// blank-only backfill would leave the dead value in place.
+const DEAD_OPENROUTER_KEY = "";
+const SUPERSEDED_GEMINI_KEYS: readonly string[] = [];
+const SUPERSEDED_CUSTOM_KEYS = [DEAD_OPENROUTER_KEY] as const;
+
 const DEFAULTS: UserSettings = {
-  provider: "gemini",
+  // Default to OpenRouter only in dev-mode builds so existing users on other
+  // providers aren't silently switched when they update the extension.
+  // In production builds (VITE_DEV_MODE unset/false) we keep "custom" as the
+  // factory default — matches the pre-PR behaviour so no hydrate migration is
+  // needed for existing installs.
+  provider: (import.meta.env.VITE_DEV_MODE as string | undefined) === "true"
+    ? "openrouter"
+    : "custom",
   anthropicKey: "",
-  geminiKey: "",
+  geminiKey: GEMINI_PRESET_KEY,
   groqKey: "",
-  customLabel: OPENROUTER_EXAMPLE.customLabel,
-  customBaseUrl: OPENROUTER_EXAMPLE.customBaseUrl,
-  customModel: OPENROUTER_EXAMPLE.customModel,
-  customKey: "",
+  customLabel: GROQ_CUSTOM_PRESET.customLabel,
+  customBaseUrl: GROQ_CUSTOM_PRESET.customBaseUrl,
+  customModel: GROQ_CUSTOM_PRESET.customModel,
+  customKey: GROQ_CUSTOM_PRESET.customKey,
   integrations: {
     zoho: { ...EMPTY_INTEGRATION, fields: {} },
     googleMeet: { ...EMPTY_INTEGRATION, fields: {} },
@@ -69,10 +108,26 @@ const DEFAULTS: UserSettings = {
 
 function hydrate(partial: Partial<UserSettings> | null | undefined): UserSettings {
   const base = { ...DEFAULTS, ...(partial || {}) };
-  // Backfill custom provider example fields when a prior save left them blank.
-  if (!base.customBaseUrl) base.customBaseUrl = OPENROUTER_EXAMPLE.customBaseUrl;
-  if (!base.customModel) base.customModel = OPENROUTER_EXAMPLE.customModel;
-  if (!base.customLabel) base.customLabel = OPENROUTER_EXAMPLE.customLabel;
+  // Scrub deprecated provider keys from older hydrated payloads (#1).
+  // Anthropic / Gemini / Groq are all proxied via the backend now; the
+  // extension has no use for these keys. Clearing them prevents stale values
+  // from lingering in chrome.storage.
+  base.anthropicKey = "";
+  base.geminiKey = "";
+  base.groqKey = "";
+  void SUPERSEDED_GEMINI_KEYS; // legacy migration list, kept for future use
+  // Force-roll forward any install pinned to a known-dead Custom preset
+  // (e.g. the OpenRouter key that ran out of credits). Replace the slot
+  // entirely with the current Groq preset so reps don't keep hitting 402s.
+  if (
+    !base.customKey ||
+    (SUPERSEDED_CUSTOM_KEYS as readonly string[]).includes(base.customKey)
+  ) {
+    base.customLabel = GROQ_CUSTOM_PRESET.customLabel;
+    base.customBaseUrl = GROQ_CUSTOM_PRESET.customBaseUrl;
+    base.customModel = GROQ_CUSTOM_PRESET.customModel;
+    base.customKey = GROQ_CUSTOM_PRESET.customKey;
+  }
   const integrations = { ...DEFAULTS.integrations, ...((partial?.integrations as UserSettings["integrations"]) || {}) };
   for (const id of Object.keys(DEFAULTS.integrations) as IntegrationId[]) {
     integrations[id] = {
@@ -170,9 +225,8 @@ export function lockAdmin(): void {
 
 export function apiKeyFor(provider: LLMProvider): string {
   const s = getSettings();
-  if (provider === "anthropic") return s.anthropicKey;
-  if (provider === "gemini") return s.geminiKey;
-  if (provider === "groq") return s.groqKey;
+  // Anthropic / Gemini / Groq are proxied via the backend (#1) — extension
+  // never holds those keys. Only custom (user-supplied endpoint) returns one.
   if (provider === "custom") return s.customKey;
   return "";
 }

@@ -58,6 +58,19 @@ interface TransponderState {
   // Live "thinking" preview — streamed text while the coach LLM is generating.
   // Cleared when the structured suggestion lands.
   thinking?: { kind: "coach"; text: string } | null;
+  // Ask-KB thread. Each entry is a question the rep typed during the call;
+  // the answer fills in once the side-panel returns it. New asks while one
+  // is still pending mark the previous as cancelled so reps never lose
+  // track of which answer maps to which question.
+  kbThread: KbThreadEntry[];
+}
+
+interface KbThreadEntry {
+  id: string;
+  question: string;
+  answer?: string;
+  status: "pending" | "done" | "cancelled" | "error";
+  createdAt: number;
 }
 
 const ROOT_ID = "clientlens-transponder";
@@ -66,6 +79,13 @@ const STORAGE_KEY = "clientlens.transponder.pos"; // legacy floating-panel posit
 const DOCK_KEY = "clientlens.transponder.dock";   // legacy vertical-dock prefs; ignored now
 const LAYOUT_KEY = "clientlens.transponder.layout";
 const AUTOSTART_KEY = "clientlens.autostart";
+// User-pinned body height (px). Default 320; persists across sessions so the
+// rep's preferred panel size sticks. Re-renders never change height — only
+// dragging the resize grip does.
+const BODY_HEIGHT_KEY = "clientlens.transponder.body_h";
+const BODY_HEIGHT_DEFAULT = 320;
+const BODY_HEIGHT_MIN = 160;
+const BODY_HEIGHT_MAX = 720;
 
 // The strip sits under the physical laptop camera — narrow enough that the
 // rep can flick their eyes between the camera lens and the prompts without
@@ -78,7 +98,7 @@ let root: HTMLDivElement | null = null;
 let promptEl: HTMLDivElement | null = null;
 let sessionStarted = false;
 let lastMeetingSignature = "";
-let state: TransponderState = { status: "idle", transcript: [], suggestions: [], rejections: [], collapsed: false, showLog: false };
+let state: TransponderState = { status: "idle", transcript: [], suggestions: [], rejections: [], collapsed: false, showLog: false, kbThread: [] };
 let silenceTimer: number | undefined;
 const SILENCE_MS = 30_000;
 const TRANSCRIPT_TAIL = 12;
@@ -174,7 +194,32 @@ function css() {
   }
   #${ROOT_ID}.idle .cl-dot { background: #5A5A62; }
   #${ROOT_ID}.error .cl-dot { background: #F87171; }
-  #${ROOT_ID} .cl-body { padding: 10px 12px; flex: 1; overflow: hidden; }
+  #${ROOT_ID} .cl-body {
+    padding: 10px 12px; flex: 1;
+    height: ${BODY_HEIGHT_DEFAULT}px;
+    min-height: ${BODY_HEIGHT_MIN}px;
+    max-height: ${BODY_HEIGHT_MAX}px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    resize: vertical;
+    /* Custom grip below makes the resize affordance obvious — Chrome's
+       default corner triangle is invisible on dark themes. */
+    position: relative;
+  }
+  #${ROOT_ID} .cl-grip {
+    position: sticky; bottom: 0; left: 0; right: 0;
+    height: 14px; margin: 10px -12px -10px;
+    cursor: ns-resize;
+    background: linear-gradient(to bottom, transparent, rgba(245,133,73,0.06));
+    border-top: 1px dashed #2A2A34;
+    pointer-events: none;
+    display: flex; align-items: center; justify-content: center; gap: 3px;
+  }
+  #${ROOT_ID} .cl-grip::before,
+  #${ROOT_ID} .cl-grip::after {
+    content: ""; width: 18px; height: 2px; background: #F58549; opacity: 0.55;
+  }
+  #${ROOT_ID} .cl-grip::after { width: 28px; }
   #${ROOT_ID} .cl-foot {
     display: flex; gap: 6px; align-items: center;
     margin-top: 8px; padding-top: 8px; border-top: 1px dashed #2A2A34;
@@ -201,17 +246,40 @@ function css() {
   #${ROOT_ID} .cl-chip-mood.mix { color: #FBBF24; }
   #${ROOT_ID} .cl-chip-sep { color: #3A3A46; }
 
-  /* ── Primary say-this card ─────────────────────────────────────────── */
-  #${ROOT_ID} .cl-primary {
+  /* ── Coach cards: SAY THIS (green) + AVOID (red).
+       Side-by-side only when the panel is wide enough; stacked otherwise so
+       the body stays readable at 560px without horizontal scrolling. ─────── */
+  #${ROOT_ID} .cl-cards {
+    display: flex; gap: 8px; align-items: stretch;
+    flex-direction: column;
+  }
+  #${ROOT_ID}.expanded .cl-cards { flex-direction: row; }
+  #${ROOT_ID}.expanded .cl-cards > * { flex: 1; min-width: 0; }
+  #${ROOT_ID} .cl-primary,
+  #${ROOT_ID} .cl-avoid {
     background: #060608;
     border: 1px solid #2A2A34;
-    border-left: 3px solid #7FB236;
     padding: 10px 12px;
+    display: flex; flex-direction: column;
   }
+  #${ROOT_ID} .cl-primary { border-left: 3px solid #7FB236; }
+  #${ROOT_ID} .cl-avoid   { border-left: 3px solid #F87171; }
   /* Confidence border: overrides the default green when validator returns
      medium/low confidence. High confidence keeps the default #7FB236. */
   #${ROOT_ID} .cl-primary.conf-med   { border-left-color: #FBBF24; }
   #${ROOT_ID} .cl-primary.conf-low   { border-left-color: #F87171; opacity: 0.88; }
+  #${ROOT_ID} .cl-avoid-title {
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: #F87171; margin-bottom: 6px;
+  }
+  #${ROOT_ID} .cl-avoid-body { font-size: 13px; line-height: 1.5; color: #F0EBDB; }
+  #${ROOT_ID} .cl-avoid-empty { font-size: 12px; color: #5A5A62; font-style: italic; }
+  #${ROOT_ID} .cl-avoid-rationale {
+    margin-top: 6px; padding-top: 6px;
+    border-top: 1px dashed #2A2A34;
+    font-size: 10px; color: #A8A195; line-height: 1.4; font-style: italic;
+  }
+  #${ROOT_ID} .cl-avoid-rationale b { color: #D4CDB5; font-style: normal; font-weight: 500; margin-right: 4px; }
   #${ROOT_ID} .cl-primary-rationale {
     margin-top: 6px; padding-top: 6px;
     border-top: 1px dashed #2A2A34;
@@ -336,6 +404,31 @@ function css() {
     margin-top: 8px; padding: 8px; background: #060608;
     border: 1px solid #2A2A34; font-size: 12px; color: #D4CDB5;
   }
+  #${ROOT_ID} .cl-kb-thread { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+  #${ROOT_ID} .cl-kb-row {
+    padding: 8px; background: #060608; border: 1px solid #2A2A34;
+    font-size: 12px; line-height: 1.45;
+  }
+  #${ROOT_ID} .cl-kb-q {
+    color: #F0EBDB; font-weight: 500; margin-bottom: 4px;
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  #${ROOT_ID} .cl-kb-tag {
+    background: #F58549; color: #0A0A0A; padding: 0 5px;
+    font-size: 10px; font-weight: 600; line-height: 16px;
+    flex: none;
+  }
+  #${ROOT_ID} .cl-kb-ans { color: #D4CDB5; }
+  #${ROOT_ID} .cl-kb-pending {
+    color: #A8A195; font-style: italic;
+    display: flex; gap: 6px; align-items: center;
+  }
+  #${ROOT_ID} .cl-kb-pending .cl-thinking-dot {
+    width: 6px; height: 6px; background: #F58549;
+    animation: cl-pulse 1s infinite;
+  }
+  #${ROOT_ID} .cl-kb-cancelled { color: #FBBF24; font-size: 11px; font-style: italic; }
+  #${ROOT_ID} .cl-kb-err { color: #F87171; font-size: 11px; }
   #${ROOT_ID} .cl-log {
     margin-top: 10px; padding-top: 10px; border-top: 1px dashed #2A2A34;
     max-height: 140px; overflow-y: auto;
@@ -487,6 +580,41 @@ function mount() {
   loadLayoutPrefs();
   applyLayout();
   render();
+  loadBodyHeight();
+  observeBodyResize();
+}
+
+function loadBodyHeight() {
+  if (!root) return;
+  let h = BODY_HEIGHT_DEFAULT;
+  try {
+    const raw = localStorage.getItem(BODY_HEIGHT_KEY);
+    if (raw) {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= BODY_HEIGHT_MIN && n <= BODY_HEIGHT_MAX) h = n;
+    }
+  } catch { /* noop */ }
+  const body = root.querySelector<HTMLDivElement>(".cl-body");
+  if (body) body.style.height = `${h}px`;
+}
+
+let bodyResizeObserver: ResizeObserver | null = null;
+function observeBodyResize() {
+  if (!root || bodyResizeObserver) return;
+  const body = root.querySelector<HTMLDivElement>(".cl-body");
+  if (!body) return;
+  let saveTimer: number | undefined;
+  bodyResizeObserver = new ResizeObserver((entries) => {
+    const e = entries[0];
+    if (!e) return;
+    const h = Math.round(e.contentRect.height + 20); // padding (10+10)
+    if (h < BODY_HEIGHT_MIN || h > BODY_HEIGHT_MAX) return;
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      try { localStorage.setItem(BODY_HEIGHT_KEY, String(h)); } catch { /* noop */ }
+    }, 200) as unknown as number;
+  });
+  bodyResizeObserver.observe(body);
 }
 
 function loadLayoutPrefs() {
@@ -628,10 +756,19 @@ function render() {
   const primaryBody = latestSay
     ? `<div class="cl-primary-title">→ ${escapeHtml(latestSay.title)}${confChip}</div>
        <div class="cl-primary-body">${escapeHtml(latestSay.body)}</div>
-       ${rationaleHtml}
-       ${latestAvoid ? `<div class="cl-primary-hint"><b>Avoid:</b>${escapeHtml(latestAvoid.body)}</div>` : ""}`
+       ${rationaleHtml}`
     : `<div class="cl-primary-title">→ Say this</div>
        <div class="cl-primary-empty">Coach is listening — a nudge will appear the moment the prospect raises a question or objection.</div>`;
+
+  const avoidRationaleHtml = latestAvoid?.rationale
+    ? `<div class="cl-avoid-rationale"><b>Why:</b>${escapeHtml(latestAvoid.rationale)}</div>`
+    : "";
+  const avoidBody = latestAvoid
+    ? `<div class="cl-avoid-title">⚠ ${escapeHtml(latestAvoid.title || "Avoid this")}</div>
+       <div class="cl-avoid-body">${escapeHtml(latestAvoid.body)}</div>
+       ${avoidRationaleHtml}`
+    : `<div class="cl-avoid-title">⚠ Avoid this</div>
+       <div class="cl-avoid-empty">No traps flagged yet — the coach will warn here when the prospect signals risk.</div>`;
 
   // ── Rejection trail (most recent only, when expanded or no active say) ──
   const lastReject = state.rejections[state.rejections.length - 1];
@@ -687,6 +824,37 @@ function render() {
   const expandGlyph = state.expanded ? "⇤⇥" : "⇥⇤";
   const expandTitle = state.expanded ? "Shrink" : "Expand wider";
 
+  // ── Ask KB thread: each entry shows the question + answer (or status) ──
+  const kbThreadHtml = state.kbThread.length
+    ? `<div class="cl-kb-thread" data-kb-thread>${state.kbThread
+        .map((e) => {
+          let body = "";
+          if (e.status === "pending") {
+            body = `<div class="cl-kb-pending"><span class="cl-thinking-dot"></span> Thinking…</div>`;
+          } else if (e.status === "cancelled") {
+            body = `<div class="cl-kb-cancelled">Cancelled — moved on to next question.</div>`;
+          } else if (e.status === "error") {
+            body = `<div class="cl-kb-err">${escapeHtml(e.answer || "Error")}</div>`;
+          } else {
+            body = `<div class="cl-kb-ans">${escapeHtml(e.answer || "")}</div>`;
+          }
+          return `<div class="cl-kb-row" data-kb-id="${e.id}">
+            <div class="cl-kb-q"><span class="cl-kb-tag">Q</span>${escapeHtml(e.question)}</div>
+            ${body}
+          </div>`;
+        })
+        .join("")}</div>`
+    : "";
+
+  // Snapshot volatile UI bits so background re-renders (coach/mood updates,
+  // 30s tick) don't blow away what the user is typing into Ask KB. The Q&A
+  // thread itself lives in state so it's re-rendered from the source of truth.
+  const prevInput = root.querySelector<HTMLInputElement>(".cl-ask");
+  const askWasFocused = !!prevInput && document.activeElement === prevInput;
+  const askValue = prevInput?.value ?? "";
+  const askSelStart = prevInput?.selectionStart ?? null;
+  const askSelEnd = prevInput?.selectionEnd ?? null;
+
   root.innerHTML = `
     <div class="cl-head">
       ${chipHtml}
@@ -701,7 +869,10 @@ function render() {
       ${errorBannerHtml}
       ${silenceHtml}
       ${thinkingHtml}
-      <div class="cl-primary ${confCls}">${primaryBody}</div>
+      <div class="cl-cards">
+        <div class="cl-primary ${confCls}">${primaryBody}</div>
+        <div class="cl-avoid">${avoidBody}</div>
+      </div>
       ${rejectHtml}
       ${secondaryHtml}
       ${moodRationaleHtml}
@@ -709,8 +880,9 @@ function render() {
         <input class="cl-ask" placeholder="Ask KB…" title="Type a quick question — agents query your indexed KB (playbooks, product docs, case studies, security, pricing)." />
         <button class="cl-btn" data-action="ask">Ask</button>
       </div>
-      <div class="cl-answer" data-answer style="display:none;margin-top:6px"></div>
+      ${kbThreadHtml}
       <div class="cl-drawer">${logHtml}</div>
+      <div class="cl-grip" title="Drag the panel's bottom-right corner to resize"></div>
     </div>
   `;
 
@@ -723,9 +895,31 @@ function render() {
   root.querySelector<HTMLButtonElement>('[data-action="expand"]')?.addEventListener("click", () => toggleExpanded());
 
   root.querySelector<HTMLButtonElement>('[data-action="ask"]')?.addEventListener("click", handleAsk);
-  root.querySelector<HTMLInputElement>(".cl-ask")?.addEventListener("keydown", (e) => {
+  const newInput = root.querySelector<HTMLInputElement>(".cl-ask");
+  newInput?.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") handleAsk();
   });
+
+  // Restore Ask KB input value, focus, and caret position so a re-render
+  // mid-typing doesn't drop characters or steal focus.
+  if (newInput) {
+    if (askValue) newInput.value = askValue;
+    if (askWasFocused) {
+      newInput.focus({ preventScroll: true });
+      if (askSelStart != null && askSelEnd != null) {
+        try { newInput.setSelectionRange(askSelStart, askSelEnd); } catch { /* noop */ }
+      }
+    }
+  }
+  // The innerHTML rewrite above recreated .cl-body, so its inline height
+  // (the user's pinned size) and the ResizeObserver binding were both lost.
+  // Reapply both so the panel keeps the rep's chosen size across re-renders.
+  loadBodyHeight();
+  if (bodyResizeObserver) {
+    bodyResizeObserver.disconnect();
+    bodyResizeObserver = null;
+  }
+  observeBodyResize();
 }
 
 function handleAsk() {
@@ -735,15 +929,31 @@ function handleAsk() {
   const q = input.value.trim();
   if (!q) return;
   input.value = "";
-  const answer = root?.querySelector<HTMLDivElement>("[data-answer]");
-  if (answer) {
-    answer.style.display = "block";
-    answer.textContent = "Thinking…";
+
+  // If a previous question is still pending, mark it cancelled so the rep
+  // sees clearly that the in-flight answer was abandoned in favour of the
+  // new question. (We can't abort the upstream HTTP request without an
+  // AbortSignal wired through the LLM client; instead we drop the response
+  // when it arrives by id-matching against thread state.)
+  for (const e of state.kbThread) {
+    if (e.status === "pending") e.status = "cancelled";
   }
+
+  const id = `kb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  // Newest first: latest question always sits at the top of the thread, so
+  // the rep's eye lands on the active answer without scrolling. Old asks
+  // remain visible below until they fall off the 12-entry cap.
+  state.kbThread.unshift({ id, question: q, status: "pending", createdAt: Date.now() });
+  if (state.kbThread.length > 12) state.kbThread.length = 12;
+  render();
+  // Scroll the body to the top so the new active entry is in view.
+  const body = root?.querySelector<HTMLDivElement>(".cl-body");
+  if (body) body.scrollTop = 0;
+
   try {
     chrome.runtime.sendMessage<MeetingCopilotMessage>({
       type: "MC_ASK_KB",
-      payload: { question: q },
+      payload: { question: q, id },
     }).catch(() => { /* sidebar may be closed */ });
   } catch { teardownOrphan(); }
 }
@@ -776,6 +986,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || typeof msg !== "object") return;
   const m = msg as { type: string; payload?: unknown };
   if (m.type === "MC_TRANSPONDER_OPEN") {
+    // Session was started from the side-panel entry point. Suppress the
+    // in-call "Start ClientLens?" prompt and tear it down if already shown,
+    // so the rep doesn't get asked twice for the same call.
+    sessionStarted = true;
+    dismissPrompt();
     mount();
     state = {
       ...state,
@@ -792,7 +1007,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (silenceTimer) window.clearTimeout(silenceTimer);
     stopTick();
     if (root) { root.remove(); root = null; }
+    // Re-enable the in-call prompt for any *future* call on this tab.
+    sessionStarted = false;
   } else if (m.type === "MC_SESSION_UPDATED") {
+    // Defensive: if updates arrive without an explicit OPEN (e.g., resumed
+    // session, page reload race), still treat the session as live.
+    sessionStarted = true;
+    dismissPrompt();
     if (!root) mount();
     const patch = (m.payload as Partial<TransponderState> & {
       suggestion?: CoachSuggestion;
@@ -822,6 +1043,18 @@ chrome.runtime.onMessage.addListener((msg) => {
     // `thinking: null` clears the live preview pill; an object replaces it.
     // Use `in` so an explicit null clears, but undefined is left alone.
     if ("thinking" in patch) state.thinking = patch.thinking ?? null;
+    // Manage silence timer on status transitions:
+    // - Pause: clear the running timer so it doesn't fire spuriously mid-pause.
+    // - Resume to listening: restart a fresh timer from zero.
+    if (patch.status && patch.status !== state.status) {
+      if (patch.status !== "listening") {
+        if (silenceTimer) { window.clearTimeout(silenceTimer); silenceTimer = undefined; }
+        state.silenceWarning = false;
+      } else if (patch.status === "listening") {
+        resetSilenceTimer();
+      }
+    }
+    if (patch.status) state.status = patch.status;
     const seg = patch.latest;
     if (seg && seg.text && seg.id !== state.transcript[state.transcript.length - 1]?.id) {
       state.transcript = [...state.transcript, seg].slice(-50);
@@ -832,12 +1065,29 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
     render();
   } else if (m.type === "MC_KB_ANSWER") {
-    const answer = root?.querySelector<HTMLDivElement>("[data-answer]");
-    const payload = m.payload as { answer?: string; error?: string };
-    if (answer) {
-      answer.style.display = "block";
-      answer.textContent = payload?.answer || payload?.error || "No answer.";
+    const payload = m.payload as { answer?: string; error?: string; id?: string };
+    // Match the response back to the question by id. If the user already
+    // moved on (cancelled it by asking another question), drop the stale
+    // answer instead of overwriting the active "Thinking…" state.
+    if (payload?.id) {
+      const entry = state.kbThread.find((e) => e.id === payload.id);
+      if (!entry) return;
+      if (entry.status === "cancelled") return;
+      entry.status = payload.error ? "error" : "done";
+      entry.answer = payload.answer || payload.error || "No answer.";
+    } else {
+      // Backward-compat: id missing — apply to the most recent pending entry
+      // (now at the top of the thread since newest is unshifted to index 0).
+      const pending = state.kbThread.find((e) => e.status === "pending");
+      if (pending) {
+        pending.status = payload?.error ? "error" : "done";
+        pending.answer = payload?.answer || payload?.error || "No answer.";
+      }
     }
+    render();
+    // Latest is at the top; pin scroll there so reps see the freshest answer.
+    const body = root?.querySelector<HTMLDivElement>(".cl-body");
+    if (body) body.scrollTop = 0;
   }
 });
 
@@ -851,10 +1101,14 @@ function ensureStyle() {
 
 function isMeetingLive(): boolean {
   // Heuristics for "call is active" rather than the landing page:
-  // - Meeting code path like /xxx-xxxx-xxx (not /landing)
+  // - Any path that looks like a meeting code: standard /abc-defg-hij OR
+  //   Google Workspace persistent rooms (/lookup/myroom, /my-room-name, etc.)
   // - Presence of the bottom control bar (mic/camera/leave buttons)
   const path = location.pathname;
-  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(path)) return false;
+  // Exclude known non-meeting paths: root, /landing, /about, /new, empty.
+  if (!path || path === "/" || /^\/(landing|about|new|u\/|_)\b/i.test(path)) return false;
+  // Require at least one alphanumeric segment — filters out bare "/" variants.
+  if (!/\/[a-z0-9]/i.test(path)) return false;
   const hasControls =
     !!document.querySelector('[aria-label*="microphone" i]') ||
     !!document.querySelector('[aria-label*="leave call" i]') ||

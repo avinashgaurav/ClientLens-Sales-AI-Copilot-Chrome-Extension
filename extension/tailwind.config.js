@@ -1,12 +1,12 @@
 /** @type {import('tailwindcss').Config}
  *
- * Design-system bridge.
+ * Clientlens design-system bridge.
  *
  * Rather than sweep every V1 component's Tailwind classes, we remap the
  * scales the existing code already uses so the whole app inherits the
  * brand automatically:
  *
- *   slate-*   → ink/line ladder (cream text on dark surfaces)
+ *   slate-*   → Clientlens ink/line ladder (cream text on dark surfaces)
  *   violet-*  → brand-orange  (primary accent / CTA)
  *   emerald-* → brand-green   (success, "live")
  *   red-*     → err (#F87171)
