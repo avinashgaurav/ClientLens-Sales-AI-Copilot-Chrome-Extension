@@ -46,6 +46,13 @@ class ZohoExchangeRequest(BaseModel):
     code: str
     redirect_uri: str
     dc: str = "com"
+    # OAuth `state` parameter forwarded from the extension. Primary CSRF
+    # defense is client-side: the extension verifies the returned state
+    # matches the one it stored before launchWebAuthFlow. We accept it here
+    # for audit logging — missing values flag legacy / non-compliant
+    # callers and let an operator find old / replayed flows in structured
+    # logs. Closes #21.
+    state: str | None = None
 
 
 @router.post("/v1/zoho/exchange")
@@ -59,6 +66,19 @@ async def zoho_exchange(request: Request, body: ZohoExchangeRequest):
     """
     user = request.state.user
     require_permission(user["role"], "crm:connect")
+
+    # Audit log the state token. Missing state = legacy caller or a CSRF
+    # attempt that bypassed the extension's client-side check. We log but
+    # do not reject; the extension is the source of truth for state
+    # verification (it has the original value to compare against).
+    if not body.state:
+        log.warning(
+            "zoho.exchange.no_state",
+            user_id=user.get("id"),
+            note="Caller did not supply an OAuth state token. Review the extension version.",
+        )
+    else:
+        log.info("zoho.exchange.state_present", user_id=user.get("id"))
 
     client_id = settings.zoho_client_id
     client_secret = settings.zoho_client_secret

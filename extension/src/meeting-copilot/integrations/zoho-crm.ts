@@ -46,12 +46,34 @@ async function clearTokens(): Promise<void> {
   try { chrome.storage?.local.remove(TOKEN_KEY); } catch { /* noop */ }
 }
 
+// Storage key for the one-shot OAuth state token. Lives in chrome.storage.session
+// (memory-only, cleared on extension reload), not local storage. Closes #21.
+const ZOHO_STATE_KEY = "clientlens.zoho.oauth_state";
+
+/**
+ * Generate a cryptographically random hex string for use as an OAuth `state`
+ * parameter. 32 bytes → 64 hex chars → ~256 bits of entropy. Browser-native
+ * crypto.getRandomValues, no Node deps.
+ */
+function generateOAuthState(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function connectZoho(): Promise<ZohoTokens> {
   const clientId = import.meta.env.VITE_ZOHO_CLIENT_ID;
   const redirectUri = import.meta.env.VITE_ZOHO_REDIRECT_URI;
   if (!clientId || !redirectUri) {
     throw new Error("Zoho OAuth env vars missing. Set VITE_ZOHO_CLIENT_ID and VITE_ZOHO_REDIRECT_URI.");
   }
+
+  // CSRF defense: generate one-shot state, ship it in the auth URL, and
+  // verify Zoho echoes the same value back in the redirect. Without this,
+  // an attacker who could deliver a crafted redirect URL to the user could
+  // link their own Zoho account to the user's session. Closes #21.
+  const state = generateOAuthState();
+  await chrome.storage.session.set({ [ZOHO_STATE_KEY]: state });
 
   const authUrl = new URL(`${accountsBase()}/oauth/v2/auth`);
   authUrl.searchParams.set("response_type", "code");
@@ -60,6 +82,7 @@ export async function connectZoho(): Promise<ZohoTokens> {
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("access_type", "offline");
   authUrl.searchParams.set("prompt", "consent");
+  authUrl.searchParams.set("state", state);
 
   const redirected = await new Promise<string>((resolve, reject) => {
     chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (redirectedUrl) => {
@@ -71,7 +94,19 @@ export async function connectZoho(): Promise<ZohoTokens> {
     });
   });
 
-  const code = new URL(redirected).searchParams.get("code");
+  // Verify state matches BEFORE we send `code` to the backend. The stored
+  // state is one-shot: clear it whether we accept or reject so a replay
+  // attempt with the same flow fails too.
+  const stored = await chrome.storage.session.get(ZOHO_STATE_KEY);
+  await chrome.storage.session.remove(ZOHO_STATE_KEY);
+  const expectedState = stored[ZOHO_STATE_KEY] as string | undefined;
+  const params = new URL(redirected).searchParams;
+  const returnedState = params.get("state");
+  const code = params.get("code");
+
+  if (!expectedState || !returnedState || expectedState !== returnedState) {
+    throw new Error("Zoho OAuth state mismatch — possible CSRF. Aborting.");
+  }
   if (!code) throw new Error("No auth code from Zoho");
 
   // Token exchange goes through the backend proxy so the client_secret stays
@@ -82,9 +117,12 @@ export async function connectZoho(): Promise<ZohoTokens> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+      Authorization: `Bearer ${jwt}`,
     },
-    body: JSON.stringify({ code, redirect_uri: redirectUri, dc: dc() }),
+    // `state` is forwarded for backend audit logging. The primary CSRF
+    // defense is the client-side equality check above; backend logs the
+    // value so a future review can flag missing/stale states.
+    body: JSON.stringify({ code, redirect_uri: redirectUri, dc: dc(), state: returnedState }),
   });
   if (!tokenRes.ok) throw new Error(`Zoho token exchange ${tokenRes.status}`);
   const body = (await tokenRes.json()) as { access_token: string; refresh_token: string; expires_in: number };
