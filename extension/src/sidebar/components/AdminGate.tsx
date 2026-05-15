@@ -51,8 +51,11 @@ export function AdminGate({ open, onUnlock, onClose }: Props) {
     }
   }
 
+  // Modal backdrop uses pure black (#000) — `bg-black` resolves to our brand
+  // black token (#0A0A0A) after the Tailwind rename, slightly lighter than
+  // intended for an overlay. Closes #23.
   return (
-    <div className="fixed inset-0 z-[10000] bg-black/70 flex items-start justify-center pt-24">
+    <div className="fixed inset-0 z-[10000] bg-[#000]/70 flex items-start justify-center pt-24">
       <div className="w-[320px] bg-surface-1 border border-line shadow-xl">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
           {mode === "set" ? <ShieldCheck size={14} className="text-orange" /> : <Lock size={14} className="text-orange" />}
