@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -185,6 +187,93 @@ async def _log_usage(
         ).execute()
     except Exception as e:  # noqa: BLE001
         log.warning("llm_usage.log_failed", error=str(e), user_id=user_id)
+
+
+# ── Per-user token budget (closes #18) ───────────────────────────────────────
+# Logging-only usage tracking is no protection against runaway costs. This
+# section reads `llm_usage` for the caller's UTC-day-to-date consumption and
+# rejects calls that would push them over `DAILY_USER_TOKEN_BUDGET`.
+#
+# Fail-open posture: if the Supabase query itself errors we LET THE CALL
+# THROUGH (logged as warning). Reasoning: a Supabase outage should not
+# wedge the whole product. The budget is a soft ceiling, not a hard gate.
+
+DAILY_USER_TOKEN_BUDGET: int = int(
+    os.environ.get("DAILY_USER_TOKEN_BUDGET", 1_000_000)  # 1M tokens / user / day
+)
+
+# Per-text byte cap on `/embed` inputs (closes #9). Even with batch-size cap
+# (EmbedRequest.texts max_length=100), a single 50MB string per element
+# bypasses the cap and burns embedding tokens. 50 KB / text is well above
+# any reasonable KB chunk size produced by the indexer (target ~1 KB).
+MAX_EMBED_TEXT_BYTES: int = int(os.environ.get("MAX_EMBED_TEXT_BYTES", 50 * 1024))
+
+
+async def _user_tokens_today(user_id: str) -> int:
+    """
+    Sum of (input + output) tokens recorded against `user_id` since the start
+    of the current UTC day. Returns 0 in dev_mode and on any query failure
+    (fail-open, see module-level note).
+    """
+    if settings.dev_mode:
+        return 0
+    try:
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        res = (
+            supabase_client()
+            .table("llm_usage")
+            .select("input_tokens, output_tokens")
+            .eq("user_id", user_id)
+            .gte("created_at", today_start.isoformat())
+            .execute()
+        )
+        return sum(
+            (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
+            for row in (res.data or [])
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("token_budget.query_failed", error=str(e), user_id=user_id)
+        return 0
+
+
+def _estimate_request_tokens(req: "LLMRequest") -> int:
+    """
+    Conservative upper bound on what one /complete or /stream call could
+    consume against the budget. Input is roughly len(prompt)/4 chars-per-token;
+    output is bounded by req.max_tokens. We're over-estimating on purpose so
+    the budget check rejects before a tighter actual count would.
+    """
+    prompt_chars = len(req.user) + len(req.system or "")
+    return (prompt_chars // 4) + req.max_tokens
+
+
+async def _enforce_token_budget(user_id: str, projected_tokens: int) -> None:
+    """
+    Reject with 429 if this call would push the user over the daily budget.
+    Skipped in dev_mode (same skip as `_log_usage`).
+    """
+    if settings.dev_mode:
+        return
+    used = await _user_tokens_today(user_id)
+    if used + projected_tokens > DAILY_USER_TOKEN_BUDGET:
+        log.info(
+            "token_budget.exceeded",
+            user_id=user_id,
+            used=used,
+            projected=projected_tokens,
+            budget=DAILY_USER_TOKEN_BUDGET,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily token budget exceeded "
+                f"({used}/{DAILY_USER_TOKEN_BUDGET} used). "
+                f"Resets at UTC 00:00."
+            ),
+            headers={"Retry-After": "3600"},
+        )
 
 
 # ── Provider dispatchers ─────────────────────────────────────────────────────
@@ -800,10 +889,12 @@ async def complete(request: Request, body: LLMRequest) -> LLMResponse:
 
     Auth: requires Supabase JWT (enforced by AuthMiddleware).
     Permission: `generate:create` (sales_rep, pmm, designer, admin).
+    Budget: rejected with 429 if the user is over DAILY_USER_TOKEN_BUDGET.
     """
     user = request.state.user
     require_permission(user["role"], "generate:create")
     _reject_unproxied(body.provider)
+    await _enforce_token_budget(user["id"], _estimate_request_tokens(body))
 
     started = time.perf_counter()
     error_msg: Optional[str] = None
@@ -859,10 +950,12 @@ async def stream(request: Request, body: LLMRequest) -> StreamingResponse:
       - `error` — terminal error: `{ "error": "..." }`
 
     Auth: requires Supabase JWT (enforced by AuthMiddleware).
+    Budget: rejected with 429 if the user is over DAILY_USER_TOKEN_BUDGET.
     """
     user = request.state.user
     require_permission(user["role"], "generate:create")
     _reject_unproxied(body.provider)
+    await _enforce_token_budget(user["id"], _estimate_request_tokens(body))
 
     if body.provider == "anthropic":
         gen = _stream_anthropic(body, user["id"])
@@ -897,9 +990,30 @@ async def embed(request: Request, body: EmbedRequest) -> EmbedResponse:
 
     Auth: requires Supabase JWT.
     Permission: `generate:create`.
+    Limits:
+      - Per-text byte cap: MAX_EMBED_TEXT_BYTES (closes #9).
+      - Daily token budget: DAILY_USER_TOKEN_BUDGET (closes #18).
     """
     user = request.state.user
     require_permission(user["role"], "generate:create")
+
+    # Per-text byte cap. Even with batch-size cap (max_length=100), one giant
+    # string per element bypasses the cap and burns embedding tokens. Reject
+    # 413 with the offending index so the caller can fix the input.
+    for i, t in enumerate(body.texts):
+        if len(t.encode("utf-8")) > MAX_EMBED_TEXT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Embed text at index {i} exceeds "
+                    f"MAX_EMBED_TEXT_BYTES ({MAX_EMBED_TEXT_BYTES} bytes)."
+                ),
+            )
+
+    # Conservative pre-flight: ~ total input bytes / 4 chars per token.
+    projected = sum(len(t) for t in body.texts) // 4
+    await _enforce_token_budget(user["id"], projected)
+
     api_key = _gemini_key()
     started = time.perf_counter()
     error_msg: Optional[str] = None
