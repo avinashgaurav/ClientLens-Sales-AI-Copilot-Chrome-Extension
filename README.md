@@ -356,6 +356,32 @@ cd extension && npm run build
 | `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` | Zoho OAuth | If using CRM push |
 | `BACKEND_URL` | Self URL (used in OAuth callbacks) | Yes |
 | `ALLOWED_ORIGINS` | CORS allowlist (extension + dev origins) | Yes |
+| `DAILY_USER_TOKEN_BUDGET` | Per-user daily LLM token cap (default `1000000`) | Optional |
+| `MAX_EMBED_TEXT_BYTES` | Per-text byte cap on `/embed` inputs (default `51200`) | Optional |
+| `ASSETS_MAX_UPLOAD_BYTES` | Per-upload byte cap on `/assets/upload` (default `26214400` = 25 MB) | Optional |
+
+### Tuning the LLM token budget
+
+`DAILY_USER_TOKEN_BUDGET` (default 1M tokens / user / UTC day) is a soft ceiling enforced before each `/complete`, `/stream`, and `/embed` call. The check reads cumulative usage from the `llm_usage` table and returns `429 Retry-After: 3600` if the call would exceed the cap.
+
+When to raise it:
+
+- **Heavy KB indexers.** A single max-batch `/embed` call (100 texts × 50 KB each, the per-text cap) projects ~1.25M tokens. If you re-index a large KB regularly, set the budget to **5M+ tokens per user** or split indexing across days.
+- **Long pitch decks.** A four-agent council pass can run 8K–20K tokens per pitch. 1M tokens fits ~50–125 pitches per day per rep. If your reps generate more than that, raise the budget.
+
+When to lower it:
+
+- **Untrusted users / multi-tenant.** Drop to **100K–250K** to keep costs bounded if a viewer-role user finds a way to call the proxy.
+
+The check is **fail-open**: if the Supabase query for today's usage errors, calls go through (logged as `token_budget.query_failed`). A Supabase outage shouldn't wedge your reps mid-call.
+
+### First-time tabCapture permission grant
+
+`tabCapture` is declared under `optional_permissions` in `manifest.json`, so the scary "Record content of your screen" warning does not appear at install time. Chrome prompts for it the first time the rep clicks **Start Live Mode**.
+
+**Edge case:** Live Mode can also auto-start when joining a Meet call if the rep has previously enabled "Don't ask again". On a brand-new install, that auto-start fires before the user has clicked anything — Chrome will not grant the permission without a user-gesture. The auto-start will silently bail; the next manual click on **Start Live Mode** prompts and grants normally. Once granted, all future auto-starts work.
+
+If you want auto-start to "just work" from install, have new reps click the Live Mode toggle once after install to grant the permission proactively.
 
 ---
 

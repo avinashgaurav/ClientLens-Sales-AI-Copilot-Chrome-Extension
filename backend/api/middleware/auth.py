@@ -8,7 +8,7 @@ from db.supabase_client import verify_token
 
 log = structlog.get_logger()
 
-UNPROTECTED_PATHS = {"/health", "/api/v1/llm/health", "/api/auth/login", "/api/auth/refresh", "/docs", "/openapi.json"}
+UNPROTECTED_PATHS = {"/health", "/api/v1/llm/health", "/docs", "/openapi.json"}
 
 # Local-dev stub user injected when DEV_MODE=true.
 # Role is intentionally "sales_rep" (not "admin") — the bypass is for auth
