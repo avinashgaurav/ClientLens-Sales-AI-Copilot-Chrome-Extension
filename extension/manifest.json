@@ -18,8 +18,10 @@
     "tabs",
     "notifications",
     "contextMenus",
-    "tabCapture",
     "offscreen"
+  ],
+  "optional_permissions": [
+    "tabCapture"
   ],
   "host_permissions": [
     "https://docs.google.com/*",

@@ -29,7 +29,6 @@ export type CouncilEvent =
   | { type: "stage"; stage: string; message: string }
   | { type: "agent"; result: AgentResult }
   | { type: "research"; brief: ResearchBrief }
-  | { type: "retry"; attempt: number; reason: string }
   | { type: "done"; pipeline: PipelineResult }
   | { type: "error"; message: string };
 
@@ -444,7 +443,10 @@ Return JSON:
 
 // ─── Council Orchestrator ─────────────────────────────────────────────────────
 
-const MAX_RETRIES = 0; // free-tier: single pass only (4 LLM calls total); retry loop caused double-run on validation "warn"
+// Single-pass council (4 LLM calls total: retrieval → ICP → brand → validation).
+// A retry loop existed previously but caused double-runs on validation "warn"
+// since validation rarely returns "pass" on the first attempt with free-tier
+// models. Removed in favour of accepting "warn" at the council vote step.
 
 export async function* runCouncil(opts: {
   input: PersonalizationInput;
@@ -490,49 +492,30 @@ export async function* runCouncil(opts: {
     }
     const retrievalOutput = retrieval.output as RetrievalOutput;
 
-    // 2–4 with retry loop on validation failure
-    let attempt = 0;
-    let draft: DraftOutput | null = null;
-    let icpResult: AgentResult | null = null;
-    let brandResult: AgentResult | null = null;
-    let validationResult: AgentResult | null = null;
-
-    while (attempt <= MAX_RETRIES) {
-      yield { type: "stage", stage: "icp_personalize", message: `Drafting for persona (attempt ${attempt + 1})…` };
-      const icp = await icpPersonalizationAgent(client, input, kb, retrievalOutput, brandAssets, brief);
-      icpResult = icp;
-      yield { type: "agent", result: icp };
-      if (icp.status === "fail") {
-        yield { type: "error", message: "ICP agent could not produce a draft" };
-        return;
-      }
-      draft = icp.draft;
-
-      yield { type: "stage", stage: "brand_check", message: "Checking Project Wingman brand compliance…" };
-      brandResult = await brandComplianceAgent(client, draft, kb);
-      yield { type: "agent", result: brandResult };
-
-      yield { type: "stage", stage: "validation", message: "Validating every claim against KB…" };
-      validationResult = await validationAgent(client, draft, kb, retrievalOutput);
-      yield { type: "agent", result: validationResult };
-
-      const brandPass = brandResult.status !== "fail";
-      const validationPass = validationResult.status === "pass";
-      if (brandPass && validationPass) break;
-
-      attempt++;
-      if (attempt > MAX_RETRIES) break;
-      yield {
-        type: "retry",
-        attempt,
-        reason: !validationPass ? "validation flagged hallucinations" : "brand compliance failed",
-      };
+    // 2. ICP personalization
+    yield { type: "stage", stage: "icp_personalize", message: "Drafting for persona…" };
+    const icpResult = await icpPersonalizationAgent(client, input, kb, retrievalOutput, brandAssets, brief);
+    yield { type: "agent", result: icpResult };
+    if (icpResult.status === "fail") {
+      yield { type: "error", message: "ICP agent could not produce a draft" };
+      return;
     }
+    const draft: DraftOutput = icpResult.draft;
+
+    // 3. Brand compliance
+    yield { type: "stage", stage: "brand_check", message: "Checking Project Wingman brand compliance…" };
+    const brandResult = await brandComplianceAgent(client, draft, kb);
+    yield { type: "agent", result: brandResult };
+
+    // 4. Validation
+    yield { type: "stage", stage: "validation", message: "Validating every claim against KB…" };
+    const validationResult = await validationAgent(client, draft, kb, retrievalOutput);
+    yield { type: "agent", result: validationResult };
 
     // 5. Council vote
     yield { type: "stage", stage: "generating", message: "Council vote…" };
 
-    const agents = [retrieval, icpResult!, brandResult!, validationResult!];
+    const agents = [retrieval, icpResult, brandResult, validationResult];
     // Accept "warn" from validation — only hard "fail" on ALL agents blocks output.
     // Previously requiring validationResult === "pass" caused the retry loop to
     // always fire (validation rarely returns "pass" on first attempt with free
@@ -548,7 +531,7 @@ export async function* runCouncil(opts: {
       return;
     }
 
-    const slides = draft!.slides;
+    const slides = draft.slides;
     const pipeline: PipelineResult = {
       request_id: `council-${Date.now()}`,
       agents,
@@ -563,7 +546,7 @@ export async function* runCouncil(opts: {
             }`,
           )
           .join("\n\n"),
-        structured_json: { slides, brand_assets: brandAssets, matched_icp: draft!.matched_icp },
+        structured_json: { slides, brand_assets: brandAssets, matched_icp: draft.matched_icp },
       },
       metadata: {
         sources_used: retrievalOutput.relevant_source_ids,
