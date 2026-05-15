@@ -803,7 +803,7 @@ function render() {
     ? tail
         .map(
           (t) =>
-            `<div class="cl-log-row"><span class="cl-log-tag ${t.speaker}">${t.speaker.toUpperCase()}</span>${escapeHtml(t.text)}</div>`,
+            `<div class="cl-log-row"><span class="cl-log-tag ${escapeHtml(t.speaker)}">${escapeHtml(t.speaker.toUpperCase())}</span>${escapeHtml(t.text)}</div>`,
         )
         .join("")
     : `<div class="cl-primary-empty">Transcript will appear here as the call progresses.</div>`;
@@ -838,7 +838,7 @@ function render() {
           } else {
             body = `<div class="cl-kb-ans">${escapeHtml(e.answer || "")}</div>`;
           }
-          return `<div class="cl-kb-row" data-kb-id="${e.id}">
+          return `<div class="cl-kb-row" data-kb-id="${escapeHtml(e.id)}">
             <div class="cl-kb-q"><span class="cl-kb-tag">Q</span>${escapeHtml(e.question)}</div>
             ${body}
           </div>`;
@@ -855,12 +855,23 @@ function render() {
   const askSelStart = prevInput?.selectionStart ?? null;
   const askSelEnd = prevInput?.selectionEnd ?? null;
 
+  // ── XSS posture (closes #16) ────────────────────────────────────────────────
+  // Every interpolation below is either:
+  //   (a) a pre-built HTML fragment (chipHtml, errorBannerHtml, …) whose
+  //       builder above runs every user-controllable value through escapeHtml,
+  //   (b) a TypeScript-typed literal union (TranscriptSpeaker, confCls), or
+  //   (c) a generated ID matching /[a-z0-9-]+/ (kb-${ts}-${rand}).
+  //
+  // If you add a NEW ${…} below, the interpolated value MUST flow through
+  // escapeHtml unless it is provably one of the above. The full DOM-builder
+  // refactor that eliminates innerHTML entirely is tracked in #19.
+
   root.innerHTML = `
     <div class="cl-head">
       ${chipHtml}
       <span class="cl-head-actions">
         <button class="cl-head-btn" data-action="log" title="Show/hide transcript">${logGlyph}</button>
-        <button class="cl-head-btn" data-action="expand" title="${expandTitle}">${expandGlyph}</button>
+        <button class="cl-head-btn" data-action="expand" title="${escapeHtml(expandTitle)}">${expandGlyph}</button>
         <button class="cl-head-btn" data-action="collapse" title="${state.collapsed ? "Expand" : "Collapse"}">${collapseGlyph}</button>
         <button class="cl-head-btn" data-action="close" title="Hide">×</button>
       </span>

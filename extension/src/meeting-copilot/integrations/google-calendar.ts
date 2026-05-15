@@ -128,8 +128,22 @@ interface RawEvent {
   organizer?: { email?: string };
 }
 
+/**
+ * List upcoming calendar events. Always non-interactive — if the user hasn't
+ * connected calendar (or the cached token has expired), this returns an empty
+ * list rather than popping Chrome's OAuth dialog mid-call. The UI should drive
+ * interactive auth from a clear opt-in surface (e.g. Settings → Connect
+ * Calendar) via `signInToCalendarInteractive()`. Closes #14.
+ */
 export async function listUpcomingMeetings(options?: { maxResults?: number; lookaheadHours?: number }): Promise<CalendarEvent[]> {
-  const token = await getToken();
+  let token: string;
+  try {
+    token = await getToken({ interactive: false });
+  } catch {
+    // No cached token → user hasn't connected calendar yet, or it expired.
+    // Fail quiet; caller treats empty list as "nothing scheduled / not wired".
+    return [];
+  }
   const timeMin = new Date().toISOString();
   const timeMax = new Date(Date.now() + (options?.lookaheadHours || 48) * 3600 * 1000).toISOString();
   const params = new URLSearchParams({

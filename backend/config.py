@@ -42,7 +42,13 @@ class Settings(BaseSettings):
 
     # App
     backend_url: str = "http://localhost:8000"
-    allowed_origins: List[str] = ["chrome-extension://", "http://localhost:3000"]
+    # Production CORS allowlist. `chrome-extension://<ID>` entries MUST include
+    # the real 32-char extension ID — `chrome-extension://` alone never matches
+    # a real Origin header. Operators set this via the `ALLOWED_ORIGINS` env
+    # var per deployment. In `dev_mode`, main.py adds an `allow_origin_regex`
+    # that accepts any unpacked-extension build + any localhost port, so this
+    # default only matters for production-style boots. Closes #13.
+    allowed_origins: List[str] = ["http://localhost:3000"]
     jwt_secret: str = "change-me-in-production"
 
     # Local dev: skip JWT verification, inject stub user in AuthMiddleware.
