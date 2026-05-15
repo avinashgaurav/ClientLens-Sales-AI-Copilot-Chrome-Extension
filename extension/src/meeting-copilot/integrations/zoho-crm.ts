@@ -82,7 +82,7 @@ export async function connectZoho(): Promise<ZohoTokens> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+      Authorization: `Bearer ${jwt}`,
     },
     body: JSON.stringify({ code, redirect_uri: redirectUri, dc: dc() }),
   });
@@ -106,7 +106,7 @@ async function refresh(tokens: ZohoTokens): Promise<ZohoTokens> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+      Authorization: `Bearer ${jwt}`,
     },
     body: JSON.stringify({ refresh_token: tokens.refresh_token, dc: tokens.dc }),
   });
@@ -174,7 +174,7 @@ async function tokensFromSettings(): Promise<ZohoTokens | null> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+        Authorization: `Bearer ${jwt}`,
       },
       body: JSON.stringify({ refresh_token: refreshToken, dc: domainDc }),
     });

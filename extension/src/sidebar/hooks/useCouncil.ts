@@ -57,12 +57,6 @@ export function useCouncil() {
           setResearchBrief(event.brief);
         } else if (event.type === "agent") {
           agentLog.push(event.result);
-        } else if (event.type === "retry") {
-          setGenerationProgress({
-            stage: "icp_personalize",
-            message: `Retry ${event.attempt} — ${event.reason}`,
-            percent: 55,
-          });
         } else if (event.type === "done") {
           setLastResult(event.pipeline);
           setGenerationProgress({ stage: "done", ...STAGE_INFO.done });
