@@ -123,6 +123,46 @@ function teardownOrphan() {
   if (promptEl) { try { promptEl.remove(); } catch { /* noop */ } promptEl = null; }
 }
 
+// ── DOM-builder helper (closes #19) ──────────────────────────────────────────
+// Replaces every innerHTML template literal in this file. Each interpolation
+// that previously had to flow through escapeHtml is now structurally safe —
+// `setText(s)` calls become `Node.textContent = s` which can't render HTML.
+//
+// Usage:
+//   el("div", { class: "cl-foo", title: titleText }, "literal text",
+//      el("span", { class: "cl-bar" }, escapedDynamicValue))
+//
+// Children can be: Node, string (becomes a text node), or false/null/undefined
+// (skipped — handy for `cond && el(...)` patterns).
+type ElChild = Node | string | number | null | undefined | false;
+type ElAttrs = Record<string, string | number | boolean | null | undefined>;
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attrs?: ElAttrs,
+  ...children: ElChild[]
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined || v === false) continue;
+      // `class` is the most common attr in this file — alias for readability.
+      if (k === "class") node.setAttribute("class", String(v));
+      else if (k === "html") {
+        // Escape hatch ONLY for trusted static markup (icon glyphs). Marked
+        // explicitly so a reviewer sees a non-text interpolation.
+        node.innerHTML = String(v);
+      } else node.setAttribute(k, String(v));
+    }
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    if (child instanceof Node) node.appendChild(child);
+    else node.appendChild(document.createTextNode(String(child)));
+  }
+  return node;
+}
+
 function injectFonts() {
   if (document.getElementById("clientlens-fonts")) return;
   const preconnect1 = document.createElement("link");
@@ -668,11 +708,12 @@ function toggleExpanded() {
   render();
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string),
-  );
-}
+// escapeHtml has been removed — every render path is now DOM-builder based,
+// so HTML escaping is structural (TextNode + setAttribute) rather than manual
+// string interpolation. If a future feature genuinely needs to inject HTML
+// (icon glyphs, etc.), use the `html` attribute of the `el()` helper above,
+// which makes the trust intent explicit at the call site.
+
 
 function pillClass(label?: string): string {
   if (label === "positive") return "pos";
@@ -718,106 +759,121 @@ function render() {
 
   // ── Header chip: company name + inline mood pill + trend + pacing ──
   const moodCls = pillClass(sent?.prospect);
-  // Show the trend arrow next to the mood label so a dip is visible at a glance.
   const moodText = trend?.label || (sent ? sent.prospect : "reading…");
-  const moodPill = `<span class="cl-chip-mood ${moodCls}">${moodEmoji(sent?.prospect)} ${escapeHtml(moodText)}</span>`;
+  const moodEl = el("span", { class: `cl-chip-mood ${moodCls}` },
+    `${moodEmoji(sent?.prospect)} ${moodText}`);
+
   const elapsedMin = state.startedAt
     ? Math.max(0, Math.floor((Date.now() - state.startedAt) / 60000))
     : 0;
   const paceCls = pacing ? (pacing.drift < -0.15 ? "behind" : pacing.drift > 0.15 ? "ahead" : "") : "";
-  const pacingHtml = pacing
-    ? `<span class="cl-pace ${paceCls}" title="${escapeHtml(pacing.label)}">${pacing.coveredCount}/${pacing.totalCount} agenda</span>`
-    : "";
-  const chipHtml = `<span class="cl-chip">
-      <span class="cl-chip-co">${escapeHtml(inp?.company_name || "Project Wingman")}</span>
-      <span class="cl-chip-sep">·</span>
-      ${moodPill}
-      <span class="cl-chip-sep">·</span>
-      <span>${elapsedMin}m</span>
-      ${pacingHtml ? `<span class="cl-chip-sep">·</span>${pacingHtml}` : ""}
-    </span>`;
+  const pacingEl: HTMLElement | null = pacing
+    ? el("span", { class: `cl-pace ${paceCls}`, title: pacing.label },
+        `${pacing.coveredCount}/${pacing.totalCount} agenda`)
+    : null;
+
+  const chipEl = el("span", { class: "cl-chip" },
+    el("span", { class: "cl-chip-co" }, inp?.company_name || "Project Wingman"),
+    el("span", { class: "cl-chip-sep" }, "·"),
+    moodEl,
+    el("span", { class: "cl-chip-sep" }, "·"),
+    el("span", {}, `${elapsedMin}m`),
+    pacingEl && el("span", { class: "cl-chip-sep" }, "·"),
+    pacingEl,
+  );
 
   // ── Primary card: one say-this with avoid as inline footnote ───────
   const { say, avoid } = activeSuggestions(state.suggestions);
   const latestSay = say[say.length - 1];
   const latestAvoid = avoid[avoid.length - 1];
 
-  // Confidence drives the left-border color. Missing = treat as high.
   const conf = latestSay?.confidence;
   const confCls = conf == null ? "" : conf >= 0.7 ? "" : conf >= 0.45 ? "conf-med" : "conf-low";
   const confLabel = conf == null ? "" : conf >= 0.7 ? "high" : conf >= 0.45 ? "med" : "low";
-  const confChip = conf != null
-    ? `<span class="cl-conf-chip ${confLabel}" title="Validator confidence">${Math.round(conf * 100)}%</span>`
-    : "";
-  const rationaleHtml = latestSay?.rationale
-    ? `<div class="cl-primary-rationale"><b>Why:</b>${escapeHtml(latestSay.rationale)}</div>`
-    : "";
+  const confChipEl: HTMLElement | null = conf != null
+    ? el("span", { class: `cl-conf-chip ${confLabel}`, title: "Validator confidence" },
+        `${Math.round(conf * 100)}%`)
+    : null;
 
-  const primaryBody = latestSay
-    ? `<div class="cl-primary-title">→ ${escapeHtml(latestSay.title)}${confChip}</div>
-       <div class="cl-primary-body">${escapeHtml(latestSay.body)}</div>
-       ${rationaleHtml}`
-    : `<div class="cl-primary-title">→ Say this</div>
-       <div class="cl-primary-empty">Coach is listening — a nudge will appear the moment the prospect raises a question or objection.</div>`;
+  const primaryEl = latestSay
+    ? el("div", { class: `cl-primary ${confCls}` },
+        el("div", { class: "cl-primary-title" }, "→ ", latestSay.title, confChipEl),
+        el("div", { class: "cl-primary-body" }, latestSay.body),
+        latestSay.rationale && el("div", { class: "cl-primary-rationale" },
+          el("b", {}, "Why:"), latestSay.rationale),
+      )
+    : el("div", { class: `cl-primary ${confCls}` },
+        el("div", { class: "cl-primary-title" }, "→ Say this"),
+        el("div", { class: "cl-primary-empty" },
+          "Coach is listening — a nudge will appear the moment the prospect raises a question or objection."),
+      );
 
-  const avoidRationaleHtml = latestAvoid?.rationale
-    ? `<div class="cl-avoid-rationale"><b>Why:</b>${escapeHtml(latestAvoid.rationale)}</div>`
-    : "";
-  const avoidBody = latestAvoid
-    ? `<div class="cl-avoid-title">⚠ ${escapeHtml(latestAvoid.title || "Avoid this")}</div>
-       <div class="cl-avoid-body">${escapeHtml(latestAvoid.body)}</div>
-       ${avoidRationaleHtml}`
-    : `<div class="cl-avoid-title">⚠ Avoid this</div>
-       <div class="cl-avoid-empty">No traps flagged yet — the coach will warn here when the prospect signals risk.</div>`;
+  const avoidEl = latestAvoid
+    ? el("div", { class: "cl-avoid" },
+        el("div", { class: "cl-avoid-title" }, `⚠ ${latestAvoid.title || "Avoid this"}`),
+        el("div", { class: "cl-avoid-body" }, latestAvoid.body),
+        latestAvoid.rationale && el("div", { class: "cl-avoid-rationale" },
+          el("b", {}, "Why:"), latestAvoid.rationale),
+      )
+    : el("div", { class: "cl-avoid" },
+        el("div", { class: "cl-avoid-title" }, "⚠ Avoid this"),
+        el("div", { class: "cl-avoid-empty" },
+          "No traps flagged yet — the coach will warn here when the prospect signals risk."),
+      );
 
   // ── Rejection trail (most recent only, when expanded or no active say) ──
   const lastReject = state.rejections[state.rejections.length - 1];
   const showReject = !!lastReject && (state.expanded || !latestSay);
-  const rejectHtml = showReject && lastReject
-    ? `<div class="cl-reject">
-         <div><b>Blocked:</b>${escapeHtml(lastReject.title)}</div>
-         <div class="cl-reject-body">${escapeHtml(lastReject.body)}</div>
-         ${lastReject.issues.length
-            ? `<div class="cl-reject-issues">${escapeHtml(lastReject.issues.join(" · "))}</div>`
-            : ""}
-       </div>`
-    : "";
+  const rejectEl: HTMLElement | null = showReject && lastReject
+    ? el("div", { class: "cl-reject" },
+        el("div", {}, el("b", {}, "Blocked:"), lastReject.title),
+        el("div", { class: "cl-reject-body" }, lastReject.body),
+        lastReject.issues.length
+          ? el("div", { class: "cl-reject-issues" }, lastReject.issues.join(" · "))
+          : null,
+      )
+    : null;
 
-  const errorBannerHtml = state.errorBanner
-    ? `<div class="cl-errbanner"><b>Coach offline:</b><span>${escapeHtml(state.errorBanner)}</span></div>`
-    : "";
+  const errorBannerEl: HTMLElement | null = state.errorBanner
+    ? el("div", { class: "cl-errbanner" },
+        el("b", {}, "Coach offline:"),
+        el("span", {}, state.errorBanner),
+      )
+    : null;
 
   // In expanded mode, show the second-most-recent say-this below, plus
   // mood rationale so the rep sees *why* the panel reads this sentiment.
   const prevSay = say.length >= 2 ? say[say.length - 2] : undefined;
-  const secondaryHtml = state.expanded && prevSay
-    ? `<div class="cl-secondary"><b>Earlier:</b> ${escapeHtml(prevSay.title)} — ${escapeHtml(prevSay.body)}</div>`
-    : "";
-  const moodRationaleHtml = state.expanded && sent?.rationale
-    ? `<div class="cl-rationale">Mood read: ${escapeHtml(sent.rationale)}</div>`
-    : "";
+  const secondaryEl: HTMLElement | null = state.expanded && prevSay
+    ? el("div", { class: "cl-secondary" },
+        el("b", {}, "Earlier:"), " ", prevSay.title, " — ", prevSay.body)
+    : null;
+  const moodRationaleEl: HTMLElement | null = state.expanded && sent?.rationale
+    ? el("div", { class: "cl-rationale" }, `Mood read: ${sent.rationale}`)
+    : null;
 
   // ── Transcript drawer (only when Log is toggled) ───────────────────
   const tail = state.transcript.slice(-TRANSCRIPT_TAIL);
-  const logHtml = tail.length
-    ? tail
-        .map(
-          (t) =>
-            `<div class="cl-log-row"><span class="cl-log-tag ${t.speaker}">${t.speaker.toUpperCase()}</span>${escapeHtml(t.text)}</div>`,
-        )
-        .join("")
-    : `<div class="cl-primary-empty">Transcript will appear here as the call progresses.</div>`;
+  const logRows: Node[] = tail.length
+    ? tail.map((t) => el("div", { class: "cl-log-row" },
+        el("span", { class: `cl-log-tag ${t.speaker}` }, t.speaker.toUpperCase()),
+        t.text))
+    : [el("div", { class: "cl-primary-empty" },
+        "Transcript will appear here as the call progresses.")];
+  const drawerEl = el("div", { class: "cl-drawer" }, ...logRows);
 
-  const silenceHtml = state.silenceWarning && state.status === "listening"
-    ? `<div class="cl-silence" style="margin:0 0 6px">No new speech in 30s — summarize or ask a question?</div>`
-    : "";
+  const silenceEl: HTMLElement | null = state.silenceWarning && state.status === "listening"
+    ? el("div", { class: "cl-silence", style: "margin:0 0 6px" },
+        "No new speech in 30s — summarize or ask a question?")
+    : null;
 
-  const thinkingHtml = state.thinking
-    ? `<div class="cl-thinking">
-         <span class="cl-thinking-dot"></span>
-         <span class="cl-thinking-text">${state.thinking.text ? escapeHtml(state.thinking.text) : "Coach is thinking…"}</span>
-       </div>`
-    : "";
+  const thinkingEl: HTMLElement | null = state.thinking
+    ? el("div", { class: "cl-thinking" },
+        el("span", { class: "cl-thinking-dot" }),
+        el("span", { class: "cl-thinking-text" },
+          state.thinking.text || "Coach is thinking…"),
+      )
+    : null;
 
   const collapseGlyph = state.collapsed ? "▾" : "▴";
   const logGlyph = state.showLog ? "⌃ Log" : "⌄ Log";
@@ -825,26 +881,29 @@ function render() {
   const expandTitle = state.expanded ? "Shrink" : "Expand wider";
 
   // ── Ask KB thread: each entry shows the question + answer (or status) ──
-  const kbThreadHtml = state.kbThread.length
-    ? `<div class="cl-kb-thread" data-kb-thread>${state.kbThread
-        .map((e) => {
-          let body = "";
+  const kbThreadEl: HTMLElement | null = state.kbThread.length
+    ? el("div", { class: "cl-kb-thread", "data-kb-thread": "true" },
+        ...state.kbThread.map((e) => {
+          let body: HTMLElement;
           if (e.status === "pending") {
-            body = `<div class="cl-kb-pending"><span class="cl-thinking-dot"></span> Thinking…</div>`;
+            body = el("div", { class: "cl-kb-pending" },
+              el("span", { class: "cl-thinking-dot" }), " Thinking…");
           } else if (e.status === "cancelled") {
-            body = `<div class="cl-kb-cancelled">Cancelled — moved on to next question.</div>`;
+            body = el("div", { class: "cl-kb-cancelled" },
+              "Cancelled — moved on to next question.");
           } else if (e.status === "error") {
-            body = `<div class="cl-kb-err">${escapeHtml(e.answer || "Error")}</div>`;
+            body = el("div", { class: "cl-kb-err" }, e.answer || "Error");
           } else {
-            body = `<div class="cl-kb-ans">${escapeHtml(e.answer || "")}</div>`;
+            body = el("div", { class: "cl-kb-ans" }, e.answer || "");
           }
-          return `<div class="cl-kb-row" data-kb-id="${e.id}">
-            <div class="cl-kb-q"><span class="cl-kb-tag">Q</span>${escapeHtml(e.question)}</div>
-            ${body}
-          </div>`;
-        })
-        .join("")}</div>`
-    : "";
+          return el("div", { class: "cl-kb-row", "data-kb-id": e.id },
+            el("div", { class: "cl-kb-q" },
+              el("span", { class: "cl-kb-tag" }, "Q"), e.question),
+            body,
+          );
+        }),
+      )
+    : null;
 
   // Snapshot volatile UI bits so background re-renders (coach/mood updates,
   // 30s tick) don't blow away what the user is typing into Ask KB. The Q&A
@@ -855,36 +914,50 @@ function render() {
   const askSelStart = prevInput?.selectionStart ?? null;
   const askSelEnd = prevInput?.selectionEnd ?? null;
 
-  root.innerHTML = `
-    <div class="cl-head">
-      ${chipHtml}
-      <span class="cl-head-actions">
-        <button class="cl-head-btn" data-action="log" title="Show/hide transcript">${logGlyph}</button>
-        <button class="cl-head-btn" data-action="expand" title="${expandTitle}">${expandGlyph}</button>
-        <button class="cl-head-btn" data-action="collapse" title="${state.collapsed ? "Expand" : "Collapse"}">${collapseGlyph}</button>
-        <button class="cl-head-btn" data-action="close" title="Hide">×</button>
-      </span>
-    </div>
-    <div class="cl-body">
-      ${errorBannerHtml}
-      ${silenceHtml}
-      ${thinkingHtml}
-      <div class="cl-cards">
-        <div class="cl-primary ${confCls}">${primaryBody}</div>
-        <div class="cl-avoid">${avoidBody}</div>
-      </div>
-      ${rejectHtml}
-      ${secondaryHtml}
-      ${moodRationaleHtml}
-      <div class="cl-foot">
-        <input class="cl-ask" placeholder="Ask KB…" title="Type a quick question — agents query your indexed KB (playbooks, product docs, case studies, security, pricing)." />
-        <button class="cl-btn" data-action="ask">Ask</button>
-      </div>
-      ${kbThreadHtml}
-      <div class="cl-drawer">${logHtml}</div>
-      <div class="cl-grip" title="Drag the panel's bottom-right corner to resize"></div>
-    </div>
-  `;
+  // ── Assemble the panel as DOM nodes (closes #19) ──────────────────────────
+  // No innerHTML template literals anywhere in this function. Every text and
+  // attribute value becomes a TextNode or a setAttribute call, so an unescaped
+  // user-controllable value cannot become HTML even if a future edit forgets
+  // to sanitize. This eliminates the persistent-XSS surface previously
+  // mitigated by escapeHtml audits.
+
+  const headEl = el("div", { class: "cl-head" },
+    chipEl,
+    el("span", { class: "cl-head-actions" },
+      el("button", { class: "cl-head-btn", "data-action": "log",
+        title: "Show/hide transcript" }, logGlyph),
+      el("button", { class: "cl-head-btn", "data-action": "expand",
+        title: expandTitle }, expandGlyph),
+      el("button", { class: "cl-head-btn", "data-action": "collapse",
+        title: state.collapsed ? "Expand" : "Collapse" }, collapseGlyph),
+      el("button", { class: "cl-head-btn", "data-action": "close",
+        title: "Hide" }, "×"),
+    ),
+  );
+
+  const askInput = el("input", {
+    class: "cl-ask",
+    placeholder: "Ask KB…",
+    title: "Type a quick question — agents query your indexed KB (playbooks, product docs, case studies, security, pricing).",
+  });
+  const askBtn = el("button", { class: "cl-btn", "data-action": "ask" }, "Ask");
+
+  const bodyEl = el("div", { class: "cl-body" },
+    errorBannerEl,
+    silenceEl,
+    thinkingEl,
+    el("div", { class: "cl-cards" }, primaryEl, avoidEl),
+    rejectEl,
+    secondaryEl,
+    moodRationaleEl,
+    el("div", { class: "cl-foot" }, askInput, askBtn),
+    kbThreadEl,
+    drawerEl,
+    el("div", { class: "cl-grip",
+      title: "Drag the panel's bottom-right corner to resize" }),
+  );
+
+  root.replaceChildren(headEl, bodyEl);
 
   root.querySelector<HTMLButtonElement>('[data-action="close"]')?.addEventListener("click", () => {
     root?.remove();
@@ -911,7 +984,7 @@ function render() {
       }
     }
   }
-  // The innerHTML rewrite above recreated .cl-body, so its inline height
+  // The replaceChildren above recreated .cl-body, so its inline height
   // (the user's pinned size) and the ResizeObserver binding were both lost.
   // Reapply both so the panel keeps the rep's chosen size across re-renders.
   loadBodyHeight();
@@ -1175,20 +1248,19 @@ function showStartPrompt() {
   if (promptEl || sessionStarted) return;
   injectFonts();
   ensureStyle();
-  promptEl = document.createElement("div");
-  promptEl.id = PROMPT_ID;
-  promptEl.innerHTML = `
-    <div class="cl-p-title">Start Project Wingman for this call?</div>
-    <div class="cl-p-sub">Live transcription, sentiment and coach nudges. Read-only — nothing is posted anywhere.</div>
-    <div class="cl-p-row">
-      <button class="cl-p-btn" data-p="start">Start copilot</button>
-      <button class="cl-p-btn ghost" data-p="skip">Not now</button>
-    </div>
-    <label class="cl-p-check">
-      <input type="checkbox" data-p="remember" />
-      Don't ask again on future calls
-    </label>
-  `;
+  promptEl = el("div", { id: PROMPT_ID },
+    el("div", { class: "cl-p-title" }, "Start Project Wingman for this call?"),
+    el("div", { class: "cl-p-sub" },
+      "Live transcription, sentiment and coach nudges. Read-only — nothing is posted anywhere."),
+    el("div", { class: "cl-p-row" },
+      el("button", { class: "cl-p-btn", "data-p": "start" }, "Start copilot"),
+      el("button", { class: "cl-p-btn ghost", "data-p": "skip" }, "Not now"),
+    ),
+    el("label", { class: "cl-p-check" },
+      el("input", { type: "checkbox", "data-p": "remember" }),
+      " Don't ask again on future calls",
+    ),
+  );
   document.body.appendChild(promptEl);
   promptEl.querySelector<HTMLButtonElement>('[data-p="start"]')?.addEventListener("click", () => {
     const remember = promptEl?.querySelector<HTMLInputElement>('[data-p="remember"]')?.checked;
