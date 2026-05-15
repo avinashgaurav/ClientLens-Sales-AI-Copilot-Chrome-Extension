@@ -438,6 +438,7 @@ The product handles OAuth tokens, transcripts, and an org-wide KB — security p
 
 ## Roadmap
 
+- **Email council UI surface** — backend agents + `useEmailCouncil` hook are already implemented; the sidebar tab + draft viewer + copy-to-clipboard flow are not yet wired
 - Salesforce + HubSpot CRM connectors (parity with Zoho)
 - Microsoft Teams meeting copilot
 - On-device STT option (Whisper / faster-whisper) for privacy-sensitive deployments
