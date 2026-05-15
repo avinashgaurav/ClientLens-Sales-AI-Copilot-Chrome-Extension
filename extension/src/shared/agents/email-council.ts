@@ -20,6 +20,7 @@ import type {
 import { ICP_PROFILES } from "../constants/icp-profiles";
 import { type LLMClient, makeLLMClient, resolveLLMConfig, type LLMProvider } from "./llm-client";
 import { extractJson } from "./council";
+import { KB_SAFETY_INSTRUCTION, kbToPromptBlock } from "./prompt-safety";
 
 export type EmailCouncilEvent =
   | { type: "stage"; stage: string; message: string }
@@ -43,11 +44,10 @@ function matchICP(role: string): ICPRole {
 }
 
 function summarizeKB(kb: KBEntry[], limit = 10): string {
-  if (!kb.length) return "(knowledge base is empty)";
-  return kb
-    .slice(0, limit)
-    .map((e, i) => `--- SOURCE ${i + 1} · ns=${e.namespace} · id=${e.id} · "${e.name}" ---\n${(e.content ?? "").slice(0, 1200)}`)
-    .join("\n\n");
+  // KB content is wrapped in <kb_source> tags + sanitized. The agents'
+  // system prompts include KB_SAFETY_INSTRUCTION which tells the model the
+  // tagged content is data, never an instruction. Closes #11.
+  return kbToPromptBlock(kb, { limit, perEntryChars: 1200 });
 }
 
 function filterKBForIntent(kb: KBEntry[], input: EmailInput): KBEntry[] {
@@ -88,7 +88,7 @@ async function retrievalAgent(
     };
   }
 
-  const system = `You are the Retrieval Agent. Pick KB sources that support an email for this intent and persona. Output strict JSON only.`;
+  const system = `You are the Retrieval Agent. Pick KB sources that support an email for this intent and persona. Output strict JSON only. ${KB_SAFETY_INSTRUCTION}`;
   const user = `INTENT: ${input.intent}
 RECIPIENT: ${input.recipient_name} · ${input.persona_role} at ${input.company_name}
 CONTEXT: ${input.context}
@@ -129,7 +129,7 @@ async function draftAgent(
     custom: "Follow the user's custom instruction.",
   };
 
-  const system = `You are the Email Drafting Agent for Project Wingman sales. Produce a concise, grounded email. No hype words ("revolutionary", "game-changing", "best-in-class"). Every numeric claim cites a source_id. Output strict JSON only.`;
+  const system = `You are the Email Drafting Agent for Project Wingman sales. Produce a concise, grounded email. No hype words ("revolutionary", "game-changing", "best-in-class"). Every numeric claim cites a source_id. Output strict JSON only. ${KB_SAFETY_INSTRUCTION}`;
   const user = `TONE RULES (persona=${profile?.label ?? input.persona_role}):
 Lead with: ${profile?.content_rules.lead_with.join(", ") ?? "business outcomes"}
 Avoid: ${profile?.content_rules.avoid.join(", ") ?? "jargon"}
@@ -187,7 +187,7 @@ async function brandCheckAgent(client: LLMClient, draft: EmailDraft, kb: KBEntry
   const brandVoice = kb.filter((e) => e.namespace === "brand_voice" && e.status === "ready");
   const guidance = brandVoice.map((e) => (e.content ?? "").slice(0, 1500)).join("\n\n");
 
-  const system = `You are the Brand Compliance Agent. Score the email against Project Wingman voice. Output strict JSON.`;
+  const system = `You are the Brand Compliance Agent. Score the email against Project Wingman voice. Output strict JSON. ${KB_SAFETY_INSTRUCTION}`;
   const user = `GUIDANCE:
 ${guidance || "Project Wingman voice: direct, numbers-first, no hype. Banned: revolutionary, game-changing, best-in-class, world-class, synergy, cutting-edge."}
 
@@ -227,7 +227,7 @@ async function validationAgent(
 ): Promise<AgentResult> {
   const used = kb.filter((e) => relevantIds.includes(e.id));
 
-  const system = `You are the Fact Validation Agent. Mark any claim not supported by the sources as hallucinated. Output strict JSON.`;
+  const system = `You are the Fact Validation Agent. Mark any claim not supported by the sources as hallucinated. Output strict JSON. ${KB_SAFETY_INSTRUCTION}`;
   const user = `SOURCES:
 ${summarizeKB(used, 8)}
 
