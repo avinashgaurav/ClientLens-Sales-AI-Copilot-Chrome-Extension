@@ -1,4 +1,7 @@
+import os
+import re
 import uuid
+from pathlib import PurePosixPath
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from db.supabase_client import supabase_client
 from rag.retriever import upsert_document, delete_document
@@ -7,6 +10,12 @@ import structlog
 
 router = APIRouter()
 log = structlog.get_logger()
+
+# Upload cap. Reads beyond this are aborted before the body is fully buffered
+# in memory, preventing a single large upload from OOMing the FastAPI process.
+# 25 MB is generous for sales decks / PDFs / docs and well under any reasonable
+# proxy default. Override via ASSETS_MAX_UPLOAD_BYTES if a deployment needs more.
+MAX_UPLOAD_BYTES: int = int(os.environ.get("ASSETS_MAX_UPLOAD_BYTES", 25 * 1024 * 1024))
 
 ASSET_NAMESPACE_MAP = {
     "design_system": "brand_guidelines",
@@ -27,6 +36,27 @@ PERMISSION_MAP = {
 }
 
 
+# Strip control chars (including newlines that enable log injection) and
+# path separators. Keep extension so the metadata is still useful.
+_UNSAFE_FILENAME_CHARS = re.compile(r"[\x00-\x1f\x7f/\\]")
+
+
+def _safe_filename(raw: str | None) -> str:
+    """
+    Sanitize a user-supplied filename for safe use in logs + DB metadata.
+    The sanitized form is NEVER used as part of a storage path — only the
+    server-generated `file_id` lives in the path (see `upload_asset`).
+    """
+    if not raw:
+        return "unknown"
+    # Take only the basename, drop any path-traversal segments.
+    base = PurePosixPath(raw.replace("\\", "/")).name or "unknown"
+    # Strip control chars + remaining separators.
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("_", base).strip(". ") or "unknown"
+    # Length cap — DB columns + log lines should not blow up on huge names.
+    return cleaned[:255]
+
+
 @router.post("/upload")
 async def upload_asset(
     request: Request,
@@ -40,12 +70,23 @@ async def upload_asset(
     if type not in ASSET_NAMESPACE_MAP:
         raise HTTPException(400, f"Unknown asset type: {type}")
 
-    content = await file.read()
+    # Read up to MAX+1 bytes; if we read more than MAX the upload is over cap.
+    # Streaming-read prevents a single multi-GB upload from filling memory
+    # before we have a chance to reject it.
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload exceeds limit of {MAX_UPLOAD_BYTES} bytes.",
+        )
     text_content = content.decode("utf-8", errors="ignore")
 
-    # Store file in Supabase Storage
+    # Storage path uses ONLY the server-generated file_id, never the user-supplied
+    # filename. This prevents path traversal via crafted filenames like
+    # "../../foo" and avoids name collisions across uploads.
     file_id = str(uuid.uuid4())
-    path = f"{type}/{file_id}/{file.filename}"
+    safe_name = _safe_filename(file.filename)
+    path = f"{type}/{file_id}"
 
     supabase_client().storage.from_("assets").upload(path, content)
 
@@ -59,7 +100,7 @@ async def upload_asset(
             text=chunk,
             namespace=namespace,
             metadata={
-                "source": file.filename or "unknown",
+                "source": safe_name,
                 "asset_type": type,
                 "file_id": file_id,
                 "chunk_index": i,
@@ -67,10 +108,10 @@ async def upload_asset(
             },
         )
 
-    # Record in DB
+    # Record in DB — sanitized name as display label, file_id as the storage key.
     supabase_client().table("assets").insert({
         "id": file_id,
-        "name": file.filename,
+        "name": safe_name,
         "type": type,
         "storage_path": path,
         "chunk_count": len(chunks),
@@ -78,7 +119,13 @@ async def upload_asset(
         "namespace": namespace,
     }).execute()
 
-    log.info("asset.uploaded", type=type, file=file.filename, chunks=len(chunks))
+    log.info(
+        "asset.uploaded",
+        type=type,
+        file=safe_name,
+        bytes=len(content),
+        chunks=len(chunks),
+    )
     return {"id": file_id, "chunks_indexed": len(chunks), "status": "indexed"}
 
 

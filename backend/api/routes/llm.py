@@ -300,8 +300,36 @@ async def _stream_anthropic(req: LLMRequest, user_id: str) -> AsyncIterator[byte
 # ── Gemini dispatch ──────────────────────────────────────────────────────────
 
 
+# Allowlist of Gemini model IDs that are valid for `_gemini_url` interpolation.
+# Rejecting anything else prevents a caller from steering the outbound URL via
+# a crafted model string (path traversal / SSRF-adjacent risk on Google's API).
+_ALLOWED_GEMINI_MODELS: frozenset[str] = frozenset({
+    # Chat / generateContent
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-2.0-flash-thinking-exp",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
+    "gemini-1.0-pro",
+    # Embeddings
+    "text-embedding-004",
+    "embedding-001",
+})
+
+
+def _validate_gemini_model(model: str) -> str:
+    if model not in _ALLOWED_GEMINI_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported Gemini model: {model!r}. See _ALLOWED_GEMINI_MODELS in routes/llm.py.",
+        )
+    return model
+
+
 def _gemini_url(model: str, action: str) -> str:
-    return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{_validate_gemini_model(model)}:{action}"
 
 
 def _gemini_body(req: LLMRequest, *, json_mode: bool = True) -> dict:
@@ -948,14 +976,12 @@ async def embed(request: Request, body: EmbedRequest) -> EmbedResponse:
 
 @router.get("/v1/llm/health")
 async def llm_health() -> dict:
-    """Lightweight health check — confirms the module loaded and which keys are set."""
-    return {
-        "status": "ok",
-        "providers_wired": sorted(_PROXIED_PROVIDERS),
-        "providers_direct": ["custom", "ollama"],
-        "anthropic_key_configured": bool(settings.anthropic_api_key),
-        "gemini_key_configured": bool(settings.gemini_api_key),
-        "groq_key_configured": bool(settings.groq_api_key),
-        "openrouter_key_configured": bool(settings.openrouter_api_key),
-        "embed_endpoint": "/api/v1/llm/embed",
-    }
+    """
+    Lightweight health check — confirms the module loaded.
+
+    Intentionally does NOT leak provider-key configuration state. An
+    earlier version returned `{anthropic,gemini,groq,openrouter}_key_configured`
+    booleans which acted as recon for an attacker mapping the surface;
+    those have been removed.
+    """
+    return {"status": "ok"}
