@@ -40,6 +40,20 @@ PERMISSION_MAP = {
 # path separators. Keep extension so the metadata is still useful.
 _UNSAFE_FILENAME_CHARS = re.compile(r"[\x00-\x1f\x7f/\\]")
 
+# File extensions that are safe to preserve in the storage path so Supabase
+# Storage can infer the correct MIME type for downloads (closes #35). Anything
+# not in this allowlist gets the path written without an extension — better
+# to lose MIME hinting than to let a poisoned filename smuggle in a script
+# extension (".html", ".svg", ".php", etc.). Lowercase only.
+_ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
+    "pdf", "txt", "md", "markdown", "csv", "json",
+    "doc", "docx", "ppt", "pptx", "xls", "xlsx",
+    "png", "jpg", "jpeg", "webp",
+})
+
+# Single dot, then 1-10 ASCII alnum chars — sized for real-world extensions.
+_EXT_RE = re.compile(r"\.([a-zA-Z0-9]{1,10})$")
+
 
 def _safe_filename(raw: str | None) -> str:
     """
@@ -55,6 +69,25 @@ def _safe_filename(raw: str | None) -> str:
     cleaned = _UNSAFE_FILENAME_CHARS.sub("_", base).strip(". ") or "unknown"
     # Length cap — DB columns + log lines should not blow up on huge names.
     return cleaned[:255]
+
+
+def _safe_extension(raw: str | None) -> str:
+    """
+    Pull an allowlisted, lowercase extension from a user-supplied filename.
+    Returns "" if the extension is missing, unrecognized, or not in the
+    allowlist. The returned value (including leading dot if non-empty) is
+    safe to concatenate into a storage path — it has no path separators and
+    is bounded to a known-safe set.
+    """
+    if not raw:
+        return ""
+    m = _EXT_RE.search(raw)
+    if not m:
+        return ""
+    ext = m.group(1).lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        return ""
+    return f".{ext}"
 
 
 @router.post("/upload")
@@ -81,12 +114,16 @@ async def upload_asset(
         )
     text_content = content.decode("utf-8", errors="ignore")
 
-    # Storage path uses ONLY the server-generated file_id, never the user-supplied
-    # filename. This prevents path traversal via crafted filenames like
-    # "../../foo" and avoids name collisions across uploads.
+    # Storage path uses the server-generated file_id plus an allowlisted
+    # extension (if the original filename had a recognized one). The extension
+    # lets Supabase Storage serve downloads with the correct MIME type
+    # (closes #35) without re-opening the path-traversal risk: only known
+    # safe extensions pass `_safe_extension`, and the file_id is a UUID
+    # that cannot collide or escape its prefix.
     file_id = str(uuid.uuid4())
     safe_name = _safe_filename(file.filename)
-    path = f"{type}/{file_id}"
+    safe_ext = _safe_extension(file.filename)
+    path = f"{type}/{file_id}{safe_ext}"
 
     supabase_client().storage.from_("assets").upload(path, content)
 
