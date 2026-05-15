@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { type LLMClient, makeLLMClient, resolveLLMConfig, type LLMProvider } from "./llm-client";
 import { extractJson } from "./council";
+import { KB_SAFETY_INSTRUCTION, kbToPromptBlock } from "./prompt-safety";
 
 export type ObjectionEvent =
   | { type: "stage"; stage: string; message: string }
@@ -24,11 +25,9 @@ export type ObjectionEvent =
 const OBJECTION_NAMESPACES = new Set(["battlecard", "case_studies", "security_compliance", "roi_pricing", "product_overview"]);
 
 function summarizeKB(kb: KBEntry[], limit = 8): string {
-  if (!kb.length) return "(no scoped KB entries)";
-  return kb
-    .slice(0, limit)
-    .map((e, i) => `--- SOURCE ${i + 1} · ns=${e.namespace} · id=${e.id} · "${e.name}" ---\n${e.content.slice(0, 1200)}`)
-    .join("\n\n");
+  // KB content is wrapped in <kb_source> tags + sanitized. Pair with
+  // KB_SAFETY_INSTRUCTION in the agent system prompt. Closes #11.
+  return kbToPromptBlock(kb, { limit, perEntryChars: 1200, emptyMessage: "(no scoped KB entries)" });
 }
 
 async function retrievalAgent(
@@ -49,7 +48,7 @@ async function retrievalAgent(
     };
   }
 
-  const system = `You are the Retrieval Agent. Pick KB sources that answer this objection. Output strict JSON only.`;
+  const system = `You are the Retrieval Agent. Pick KB sources that answer this objection. Output strict JSON only. ${KB_SAFETY_INSTRUCTION}`;
   const user = `OBJECTION: ${input.objection_text}
 ${input.competitor_hint ? `COMPETITOR HINT: ${input.competitor_hint}` : ""}
 
@@ -79,7 +78,7 @@ async function respondAgent(
 ): Promise<AgentResult & { response: ObjectionResponse }> {
   const used = kb.filter((e) => relevantIds.includes(e.id));
 
-  const system = `You are the Objection Response Agent for Project Wingman. Respond to the prospect's objection using ONLY the cited sources. Be concise, specific, numerical. No hype words. Never invent customers. Output strict JSON only.`;
+  const system = `You are the Objection Response Agent for Project Wingman. Respond to the prospect's objection using ONLY the cited sources. Be concise, specific, numerical. No hype words. Never invent customers. Output strict JSON only. ${KB_SAFETY_INSTRUCTION}`;
   const user = `OBJECTION (from prospect):
 "${input.objection_text}"
 ${input.source_url ? `\nContext: ${input.source_title ?? ""} (${input.source_url})` : ""}

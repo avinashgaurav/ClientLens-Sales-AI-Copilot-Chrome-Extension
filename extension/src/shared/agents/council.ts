@@ -24,6 +24,7 @@ import type {
 import { ICP_PROFILES } from "../constants/icp-profiles";
 import { type LLMClient, makeLLMClient, resolveLLMConfig } from "./llm-client";
 import { runResearch, briefToPrompt } from "./research";
+import { KB_SAFETY_INSTRUCTION, kbToPromptBlock } from "./prompt-safety";
 
 export type CouncilEvent =
   | { type: "stage"; stage: string; message: string }
@@ -100,15 +101,10 @@ function rankKBByQuery(kb: KBEntry[], query: string): KBEntry[] {
 }
 
 function summarizeKB(kb: KBEntry[], query?: string): string {
-  if (!kb.length) return "(knowledge base is empty)";
+  // KB content is wrapped in <kb_source> tags + sanitized. Pair with
+  // KB_SAFETY_INSTRUCTION in every agent's system prompt. Closes #11.
   const ranked = query ? rankKBByQuery(kb, query) : kb;
-  return ranked
-    .slice(0, 20)
-    .map((e, i) => {
-      const body = e.content ? e.content.slice(0, 1500) : `[${e.status} — ${e.name}]`;
-      return `--- SOURCE ${i + 1} · ns=${e.namespace} · id=${e.id} · "${e.name}" ---\n${body}`;
-    })
-    .join("\n\n");
+  return kbToPromptBlock(ranked, { limit: 20, perEntryChars: 1500 });
 }
 
 export function extractJson<T>(text: string): T | null {
@@ -203,7 +199,7 @@ async function retrievalAgent(
     };
   }
 
-  const system = `You are the Retrieval Agent for Project Wingman's sales council. Identify the KB sources that directly support a personalized deck for this target. Output strict JSON only.`;
+  const system = `You are the Retrieval Agent for Project Wingman's sales council. Identify the KB sources that directly support a personalized deck for this target. Output strict JSON only. ${KB_SAFETY_INSTRUCTION}`;
   const user = `TARGET:
 - Company: ${input.company_name}
 - Persona: ${input.persona_role}
@@ -277,7 +273,9 @@ async function icpPersonalizationAgent(
 
   const system = `You are the ICP Personalization Agent. Draft a ${icp.label}-tailored deck grounded ONLY in the cited sources. Use Project Wingman product facts verbatim (317 rules, up to 60%, ISO 27001 + SOC 2 Type II, <5 min setup, 30-day pilot). Do NOT invent customer logos, savings figures, or quotes.
 
-FORMAT: ${format.replace(/_/g, " ")}. ${formatDirective[format]}`;
+FORMAT: ${format.replace(/_/g, " ")}. ${formatDirective[format]}
+
+${KB_SAFETY_INSTRUCTION}`;
 
   const user = `ICP: ${icp.label}
 Lead with: ${icp.content_rules.lead_with.join(", ")}
@@ -355,7 +353,7 @@ async function brandComplianceAgent(
 
   const fallbackVoice = `Project Wingman voice: direct, numbers-first, no hype. Avoid "revolutionary", "game-changing", "best-in-class", "world-class". Use "317 rules", "up to 60%", "30-day pilot", "read-only", "no agents".`;
 
-  const system = `You are the Brand Compliance Agent. Check the draft against Project Wingman voice and design system. Output strict JSON.`;
+  const system = `You are the Brand Compliance Agent. Check the draft against Project Wingman voice and design system. Output strict JSON. ${KB_SAFETY_INSTRUCTION}`;
   const user = `GUIDANCE:
 ${guidance || fallbackVoice}
 
@@ -402,7 +400,7 @@ async function validationAgent(
 ): Promise<AgentResult> {
   const usedSources = kb.filter((e) => retrieval.relevant_source_ids.includes(e.id));
 
-  const system = `You are the Fact Validation Agent. Audit every numeric and named claim in the draft. Mark "hallucinated" for any claim not supported by the cited sources. Output strict JSON.`;
+  const system = `You are the Fact Validation Agent. Audit every numeric and named claim in the draft. Mark "hallucinated" for any claim not supported by the cited sources. Output strict JSON. ${KB_SAFETY_INSTRUCTION}`;
   const user = `SOURCES (ground truth):
 ${summarizeKB(usedSources)}
 
